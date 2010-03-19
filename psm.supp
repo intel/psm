@@ -1,0 +1,58 @@
+
+# userinit
+{
+   syscall_ipath_userinit
+   Memcheck:Param
+   write(buf)
+   fun:__write_nocancel
+   fun:ipath_userinit
+}
+
+# syscall poll type
+{
+   syscall_poll_type
+   Memcheck:Param
+   write(buf)
+   obj:/lib64/libc*.so
+   fun:ipath_poll_type
+}
+
+# Tids allocation.
+{
+   syscall_tid_free
+   Memcheck:Param
+   write(buf)
+   obj:/lib64/libc*.so
+   fun:ips_tid_release
+}
+
+# Tids de-allocation.
+{
+   syscall_tid_alloc
+   Memcheck:Param
+   write(buf)
+   obj:/lib64/libc*so
+   fun:ips_tid_acquire
+}
+
+# really in QLogic MPI
+{
+   mpspawn_socket
+   Memcheck:Param
+   socketcall.sendto(msg)
+   fun:send
+   fun:psc_skt_sendN
+}
+
+# gethostbyname on sles
+{
+   gethostbyname
+   Memcheck:Param
+   socketcall.sendto(msg)
+   fun:send
+   fun:get_mapping
+   fun:__nscd_get_map_ref
+   fun:nscd_gethst_r
+   fun:__nscd_gethostbyname_r
+   fun:gethostbyname_r@@GLIBC_2.2.5
+}

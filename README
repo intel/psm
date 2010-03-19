@@ -1,0 +1,131 @@
+
+  Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+  Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
+ 
+  This software is available to you under a choice of one of two
+  licenses.  You may choose to be licensed under the terms of the GNU
+  General Public License (GPL) Version 2, available from the file
+  COPYING in the main directory of this source tree, or the
+  OpenIB.org BSD license below:
+ 
+      Redistribution and use in source and binary forms, with or
+      without modification, are permitted provided that the following
+      conditions are met:
+ 
+       - Redistributions of source code must retain the above
+         copyright notice, this list of conditions and the following
+         disclaimer.
+ 
+       - Redistributions in binary form must reproduce the above
+         copyright notice, this list of conditions and the following
+         disclaimer in the documentation and/or other materials
+         provided with the distribution.
+ 
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+  BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+  ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+  CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+ 
+================================================================================
+
+OFED Support
+------------
+OFED 1.5.1rc2 or above should be installed on the node. Prior versions of OFED
+have an older QLogic IB driver (ib_qib) and do not fully support all the PSM
+features with this release.
+
+Building PSM
+------------
+Building has only been tested on RHEL 5.3 though other linux distributions 
+should work as well. Build requires that GNU GCC and GFORTRAN compilers are
+installed on the machine doing the build. Root privileges are required to
+install the runtime libraries and development header files into standard
+system locations.
+
+1. Untar the tarball:
+	$ tar zxvf InfiniPath-PSM.tar.gz
+2. Change directory into the untarred location:
+	$ cd InfiniPath-PSM
+3. Run make on the command line. This will build the libraries
+	$ make
+4. Install the libraries and header files on the system (as root):
+	$ make install
+
+The libraries will be installed in either /usr/lib or /usr/lib64, depending on
+the architecture of the machine, and the header files will be installed in 
+/usr/include.
+
+If you run into any issues during build please post any questions with as much 
+information as possible to the psm-devel mailing list. Please include the 
+distribution you are building on, the compiler type and version as well as any 
+relevant error messages.
+
+MPI Libraries supported
+-----------------------
+A large number of open source (OpenMPI, MVAPICH, MVAPICH2) and Vendor MPI
+implementations support PSM for optimized communication on QLogic Truescale
+Infiniband HCAs. Vendor MPI implementations (HP-MPI, Intel MPI 4.0 with PMI,
+Platform/Scali MPI) require that the PSM runtime libraries be installed and
+available on each node. Usually a configuration file or a command line switch
+to mpirun needs to be specified to utilize the PSM transport.
+
+OpenMPI support
+---------------
+It is recommended to use the OpenMPI v1.5 development branch. Prior versions
+of OpenMPI have an issue with support PSM network transports mixed with standard
+Verbs transport (BTL openib). This prevents an OpenMPI installation with
+network modules available for PSM and Verbs to work correctly on nodes with
+no QLogic IB hardware. This has been fixed in the latest development branch
+allowing a single OpenMPI installation to target IB hardware via PSM or Verbs
+as well as alternate transports seamlessly.
+
+PSM header and runtime files need to be installed on a node where the OpenMPI
+build is performed. All compute nodes additionally should have the PSM runtime
+libraries available on them. OpenMPI provides a standard configure, make and
+make install mechanism which will detect and build the relevant PSM network
+modules for OpenMPI once the header and runtime files are detected. Further
+information on compiling and running MPI applications with OpenMPI on PSM is
+available in the QLogic OFED User guide available at:
+
+http://driverdownloads.qlogic.com/QLogicDriverDownloads_UI/SearchByProduct.aspx?ProductCategory=301&Product=1116&Os=65
+
+MVAPICH and MVAPICH2 support
+----------------------------
+Both MVAPICH and MVAPICH2 support PSM transport for optimized communication on
+QLogic Truescale IB hardware. MVAPICH2 1.4 and MVAPICH 1.2 versions are
+recommended. PSM header and runtime files need to be installed on a node where 
+MVAPICH builds are performed. All compute nodes additionally should have the 
+PSM runtime libraries available on them.
+
+MVAPICH provides a shell script in it's top level directory called
+make.mvapich.psm to configur, make and install MVAPICH with PSM support.
+
+MVAPICH2 provides a standard configure and make infrastructure. In order to
+MVAPICH2 for PSM the following should be performed from the top level directory:
+
+    - ./configure --prefix=<path_to_install_mvapich2> --with-device=ch3:psm
+    - make
+    - make install
+
+Further information on compiling and running MPI applications with MVAPICH on 
+PSM is available in the QLogic OFED User guide available at:
+
+http://driverdownloads.qlogic.com/QLogicDriverDownloads_UI/SearchByProduct.aspx?ProductCategory=301&Product=1116&Os=65
+
+Submitting comments, bugs, questions
+------------------------------------
+The best way to report bugs, send comments or ask questions is to sign up to the
+developers mailing list: psm-devel@qlogic.com. Because of spam only subscribers
+are allowed to post to the list. Please ensure that you subscribe with and post
+from the same email address else posts will be blocked as spam. To subscribe 
+send the following in the BODY of an email to majordomo@qlogic.com:
+
+  subscribe psm-devel
+
+Majordomo will reply back with instructions on how to confirm your subscription.
+The mailing list can be used to report bugs, send comments and ask questions.
+
