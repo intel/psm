@@ -31,6 +31,8 @@
  * SOFTWARE.
  */
 
+#if !defined(PSM_USE_SYS_UUID)
+
 #define STDC_HEADERS 1
 #define HAVE_SYS_TYPES_H 1
 #define HAVE_SYS_STAT_H 1
@@ -179,6 +181,11 @@
 #include "unparse.c"
 #include "psm_help.h"
 
+#else /* PSM_USE_SYS_UUID */
+#include <uuid/uuid.h>
+#include "psm_user.h"
+#endif
+
 void
 __psm_uuid_generate(psm_uuid_t uuid_out)
 {
@@ -204,3 +211,4 @@ psmi_uuid_parse(const char *in, uuid_t uu)
 {
     return uuid_parse(in, uu);
 }
+

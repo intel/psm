@@ -52,8 +52,9 @@ ${TARGLIB}-objs := ipath_debug.o ipath_time.o ipath_proto.o \
 all .DEFAULT: ${TARGLIB}.so
 
 install: all
-	install -t ${INSTALL_LIB_TARG} ${TARGLIB}.so.${MAJOR}.${MINOR}
-	(cd ${INSTALL_LIB_TARG} ; \
+	install -D ${TARGLIB}.so.${MAJOR}.${MINOR} \
+		${DESTDIR}${INSTALL_LIB_TARG}/${TARGLIB}.so.${MAJOR}.${MINOR}
+	(cd ${DESTDIR}${INSTALL_LIB_TARG} ; \
 		ln -sf ${TARGLIB}.so.${MAJOR}.${MINOR} ${TARGLIB}.so.${MAJOR} ; \
 		ln -sf ${TARGLIB}.so.${MAJOR} ${TARGLIB}.so)
 

@@ -269,7 +269,7 @@ _update_error_stats(struct ips_proto *proto, uint32_t err)
     proto->error_stats.num_ib_err++;
 }
 
-static __inline__ int
+static int
 _check_headers(struct ips_recvhdrq_event *rcv_ev)
 {
   struct ips_recvhdrq *recvq = (struct ips_recvhdrq*) rcv_ev->recvq;
@@ -335,7 +335,7 @@ _check_headers(struct ips_recvhdrq_event *rcv_ev)
   return 0;
 }
 
-static __inline__
+static __inline__ 
 int
 do_pkt_cksum(struct ips_recvhdrq_event *rcv_ev)
 {
@@ -435,8 +435,6 @@ ips_recvhdrq_progress(struct ips_recvhdrq *recvq)
     uint32_t num_hdrq_done = 0;
     const int num_hdrq_todo = recvq->hdrq.elemcnt;
     const uint32_t hdrq_elemsz = recvq->hdrq.elemsz;
-
-    psm_error_t err = PSM_OK_NO_PROGRESS;
     unsigned etiderrs = 0;
     uint32_t dest_subcontext;
 
@@ -512,10 +510,10 @@ ips_recvhdrq_progress(struct ips_recvhdrq *recvq)
 	  rcv_ev.is_congested = 0;
 
 	dest_subcontext  = _get_proto_subcontext(rcv_ev.p_hdr);
-	
-	if (_check_headers(&rcv_ev))
+
+	if_pf (_check_headers(&rcv_ev))
 	  goto skip_packet;
-	
+
         if_pf (rcv_ev.error_flags || 
 	       (_get_proto_ipath_opcode(rcv_ev.p_hdr) != IPATH_OPCODE_USER1)) 
 	{
@@ -601,7 +599,7 @@ skip_packet_no_egr_update:
 			 (state->num_hdrq_done == state->head_update_interval) : done);
 	if (do_hdr_update) {
 	    ips_recvq_head_update(&recvq->hdrq, state->hdrq_head);
-	    
+
 	    /* Lazy update of egrq */
 	    if (state->rcv_egr_index_head != NO_EAGER_UPDATE) {
 	      ips_recvq_head_update(&recvq->egrq, state->rcv_egr_index_head);
@@ -615,8 +613,6 @@ skip_packet_no_egr_update:
 
 	    /* Reset header queue entries processed */
 	    state->num_hdrq_done = 0;
-
-	    err = PSM_OK; /* processed *some* packets */
 	}
     }
     /* while (hdrq_entries_to_read) */
@@ -624,7 +620,7 @@ skip_packet_no_egr_update:
     /* Process any pending acks before exiting */
     process_pending_acks(recvq);
     
-    return err;
+    return num_hdrq_done ? PSM_OK : PSM_OK_NO_PROGRESS;
 }
 
 #if IPS_RCVHDRQ_THRU_FUNCTION_POINTER

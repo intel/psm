@@ -50,16 +50,34 @@ export IPATH_LIB_MINOR
 export CCARCH := gcc
 export FCARCH := gfortran
 
+# Try to figure out which libuuid to use. This needs to be
+# done before we include buildflags.mak
+PSM_USE_SYS_UUID=0
+ifneq (1,${USE_PSM_UUID})
+    # Check whether the uuid header file is present. The header file is
+    # installed by the -devel package, which should have a dependency
+    # on the package which installs the library.
+    PSM_HAVE_UUID_H=$(shell if [ -f /usr/include/uuid/uuid.h ]; then echo 1; else echo 0; fi)
+    ifeq (1,${PSM_HAVE_UUID_H})
+       PSM_USE_SYS_UUID=1
+    endif
+endif
+export PSM_USE_SYS_UUID
+
 top_srcdir := .
 include $(top_srcdir)/buildflags.mak
 lib_build_dir := $(build_dir)
 
-ifeq (${arch},x86_64)
-   INSTALL_LIB_TARG=/usr/lib64
+ifndef LIBDIR
+   ifeq (${arch},x86_64)
+      INSTALL_LIB_TARG=/usr/lib64
+   else
+      INSTALL_LIB_TARG=/usr/lib
+   endif
 else
-   INSTALL_LIB_TARG=/usr/lib
+   INSTALL_LIB_TARG=${LIBDIR}
 endif
-
+export DESTDIR
 export INSTALL_LIB_TARG
 
 TARGLIB := libpsm_infinipath
@@ -67,7 +85,7 @@ TARGLIB := libpsm_infinipath
 MAJOR := $(PSM_LIB_MAJOR)
 MINOR := $(PSM_LIB_MINOR)
 
-LDLIBS := -linfinipath -lrt -lpthread -ldl
+LDLIBS := -linfinipath -lrt -lpthread -ldl ${EXTRA_LIBS}
 
 all: symlinks
 	for subdir in $(SUBDIRS); do \
@@ -101,11 +119,13 @@ install: all
 	for subdir in $(SUBDIRS); do \
 		$(MAKE) -C $$subdir $@ ;\
 	done
-	install -t ${INSTALL_LIB_TARG} ${TARGLIB}.so.${MAJOR}.${MINOR}
-	(cd ${INSTALL_LIB_TARG} ; \
+	install -D ${TARGLIB}.so.${MAJOR}.${MINOR} \
+		${DESTDIR}${INSTALL_LIB_TARG}/${TARGLIB}.so.${MAJOR}.${MINOR}
+	(cd ${DESTDIR}${INSTALL_LIB_TARG} ; \
 		ln -sf ${TARGLIB}.so.${MAJOR}.${MINOR} ${TARGLIB}.so.${MAJOR} ; \
 		ln -sf ${TARGLIB}.so.${MAJOR} ${TARGLIB}.so)
-	install -t /usr/include psm.h psm_mq.h
+	install -D psm.h ${DESTDIR}/usr/include/psm.h
+	install -D psm_mq.h ${DESTDIR}/usr/include/psm_mq.h
 
 # rebuild the cscope database, skipping sccs files, done once for
 # top level

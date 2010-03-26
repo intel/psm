@@ -41,23 +41,36 @@ features with this release.
 Building PSM
 ------------
 Building has only been tested on RHEL 5.3 though other linux distributions 
-should work as well. Build requires that GNU GCC and GFORTRAN compilers are
-installed on the machine doing the build. Root privileges are required to
-install the runtime libraries and development header files into standard
-system locations.
+should work as well. Build requires that GNU GCC compiler is installed on 
+the machine doing the build. Root privileges are required to install the
+runtime libraries and development header files into standard system location.
 
 1. Untar the tarball:
 	$ tar zxvf InfiniPath-PSM.tar.gz
 2. Change directory into the untarred location:
 	$ cd InfiniPath-PSM
-3. Run make on the command line. This will build the libraries
+3. Run make on the command line. This will build the libraries. By default,
+   the Makefile will auto-detect whether libuuid and the uuid.h header file
+   are installed. If so, it will use the system's libuuid. Otherwise, PSM
+   will be compiled with the libuuid included with PSM.
 	$ make
+   To force compiling with the included libuuid, use the USE_PSM_UUID variable:
+        $ make USE_PSM_UUID=1
 4. Install the libraries and header files on the system (as root):
 	$ make install
 
 The libraries will be installed in either /usr/lib or /usr/lib64, depending on
 the architecture of the machine, and the header files will be installed in 
 /usr/include.
+This behavior can be altered by using the "DESTDIR" and "LIBDIR" variables on
+the "make install" command line. "DESTDIR" will add a leading path component
+to the overall install path and "LIBDIR" will change the path where libraries
+will be installed. For example, "make DESTDIR=/tmp/psm-install install" will
+install all files (libraries and headers) into "/tmp/psm-install/usr/...",
+"make DESTDIR=/tmp/psm-install LIBDIR=/libraries install" will install the
+libraries in "/tmp/psm-install/libraries" and the headers in
+"/tmp/psm-install/usr/include", and "make LIBDIR=/tmp/libs install" will
+install the libraries in "/tmp/libs" and the headers in "/usr/include".
 
 If you run into any issues during build please post any questions with as much 
 information as possible to the psm-devel mailing list. Please include the 

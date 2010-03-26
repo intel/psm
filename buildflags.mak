@@ -58,6 +58,11 @@ ifneq (,${PSM_PROFILE})
 endif
 BASECFLAGS += -fpic -fPIC -funwind-tables -D_GNU_SOURCE
 
+ifeq (1,${PSM_USE_SYS_UUID})
+  BASECFLAGS += -DPSM_USE_SYS_UUID
+  EXTRA_LIBS = -luuid
+endif
+
 ifneq (,${PSM_VALGRIND})
   CFLAGS += -DPSM_VALGRIND
 else

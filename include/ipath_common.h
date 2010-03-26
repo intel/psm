@@ -122,6 +122,7 @@ typedef enum _ipath_ureg {
 #define IPATH_RUNTIME_FORCE_WC_ORDER	0x4
 #define IPATH_RUNTIME_RCVHDR_COPY	0x8
 #define IPATH_RUNTIME_MASTER	0x10
+#define IPATH_RUNTIME_RCHK	0x20
 #define IPATH_RUNTIME_NODMA_RTAIL 0x80
 #define IPATH_RUNTIME_SPECIAL_TRIGGER 0x100
 #define IPATH_RUNTIME_SDMA 0x200
@@ -161,9 +162,9 @@ struct ipath_base_info {
 	 */
 	__u32 spi_mtu;
 	/*
-	 * Size of a PIO buffer.  Any given packet's total size must be less
-	 * than this (in words).  Included is the starting control word, so
-	 * if 513 is returned, then total pkt size is 512 words or less.
+	 * Size of a PIO buffer in byts.  Any given packet's total size must
+	 * be less than this.  Included is the starting control word, so
+	 * if 2052 is returned, then total pkt size is 2048 bytes or less.
 	 */
 	__u32 spi_piosize;
 	/* size of the TID cache in infinipath, in entries */
@@ -232,7 +233,7 @@ struct ipath_base_info {
 
 	/*
 	 * Base address of writeonly pio buffers for this process.
-	 * Each buffer has spi_piosize words, and is aligned on spi_pioalign
+	 * Each buffer has spi_piosize bytes, and is aligned on spi_pioalign
 	 * boundaries.  spi_piocnt buffers are mapped from this address
 	 */
 	__u64 spi_piobufbase;

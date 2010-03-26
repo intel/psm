@@ -335,7 +335,8 @@ ips_none_path_rec(struct ips_proto *proto,
 static psm_error_t ips_none_path_rec_init(struct ips_proto *proto)
 {
   psm_error_t err = PSM_OK;
-  
+  union psmi_envvar_val psm_set_hca_pkey;
+
   /* Obtain the SL and PKEY to use from the environment (IPATH_SL & PSM_KEY) */
   proto->epinfo.ep_sl = psmi_epid_sl(proto->ep->epid);
   proto->epinfo.ep_pkey    = (uint16_t) proto->ep->network_pkey;
@@ -369,9 +370,29 @@ static psm_error_t ips_none_path_rec_init(struct ips_proto *proto)
     proto->epinfo.ep_timeout_ack_factor = tvals[2];
   }
 
+  /* With no path records queries set pkey manually if PSM_SET_HCA_PKEY is
+   * set.
+   */
+  psmi_getenv("PSM_SET_HCA_PKEY",
+	      "Force write of PKey to HCA (default is disabled)",
+	      PSMI_ENVVAR_LEVEL_HIDDEN, PSMI_ENVVAR_TYPE_UINT_FLAGS,
+	      (union psmi_envvar_val) 0, &psm_set_hca_pkey);
+  
+  if (psm_set_hca_pkey.e_uint) {
+    if (ipath_set_pkey(proto->ep->context.ctrl,
+		       (uint16_t) proto->ep->network_pkey) != 0) {
+      err = psmi_handle_error(proto->ep, PSM_EP_DEVICE_FAILURE,
+			      "Couldn't set device pkey %d: %s",
+			      (int) proto->ep->network_pkey,
+			      strerror(errno));
+      goto fail;
+    }
+  }
+
   proto->ibta.get_path_rec = ips_none_path_rec;
   proto->ibta.fini = NULL;
 
+ fail:
   return err;
 }
 

@@ -398,7 +398,7 @@ psmi_context_check_status(const psmi_context_t *contexti)
 	    !(ibstatus & IPATH_STATUS_IB_READY)) {
 	err = PSM_OK_NO_PROGRESS; /* Cable pulled, switch rebooted, ... */
 	if (err != context->spi_status_lasterr) { /* report once */
-#ifdef BRINGUP /* Remove logging this for early access */
+#if 0
 	    psmi_handle_error(PSMI_EP_LOGEVENT, PSM_EP_NO_NETWORK,
 		    "IB Link is down");
 #endif
