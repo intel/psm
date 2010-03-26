@@ -81,7 +81,7 @@ void ipath_write_pio_force_order(volatile uint32_t *piob,
     // 32 bit programs require fence after first 32 bits of pbc write
     // Can't do as uint64_t store, or compiler could reorder
     ips_wmb();
-    *piob++ = 0;
+    *piob++ = buf.pbcflags;
 
     if(!pioparm->length) {
         uint32_t *dhdr, dcpywords;
@@ -165,7 +165,7 @@ void ipath_write_pio(volatile uint32_t *piob,
     // the two 32 bit stores in a uint64_t, but on inorder wc systems, does not
     // need a memory fence.
     asm volatile("" : : : "memory");
-    *piob++ = 0;
+    *piob++ = buf.pbcflags;
 
     ipath_dwordcpy_safe(piob, hdr,
         IPATH_MESSAGE_HDR_SIZE >> 2);
@@ -232,7 +232,7 @@ static void ipath_write_pio_special_trigger(volatile uint32_t *piob,
     // the two 32 bit stores in a uint64_t, but on inorder wc systems, does not
     // need a memory fence.
     asm volatile("" : : : "memory");
-    *piob++ = 0;
+    *piob++ = buf.pbcflags;
 
     ipath_dwordcpy_safe(piob, hdr,
         IPATH_MESSAGE_HDR_SIZE >> 2);
