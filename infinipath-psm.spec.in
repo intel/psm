@@ -1,0 +1,77 @@
+Name: InfiniPath-PSM
+Version: @VERSION@
+Release: 1%{?dist}
+
+Summary: QLogic PSM library
+License: GPL
+Group: System Environment/Libraries
+BuildRoot: %{_tmppath}/%{name}-@VERSION@-%{release}
+Source: @TARBALL@
+BuildRequires: libtool glibc-devel glibc-headers
+Requires: glibc
+Requires(post): /sbin/ldconfig
+Requires(postun): /sbin/ldconfig
+
+%description
+An alternative interface to QLogic InfiniBand HCA's.
+FIXME??  This needs a better description.
+
+%package devel
+Summary: Development files for the libpsm_infinipath library
+Group: System Environment/Libraries
+Requires: %{name} = %{version}-%{release}
+Requires(post): /sbin/ldconfig
+Requires(postun): /sbin/ldconfig
+
+%description devel
+Development files for the libpsm_infinipath library
+
+%package static
+Summary: Static version of the libpsm_infinipath library
+Group: System Environment/Libraries
+Requires: %{name} = %{version}-%{release}
+
+%description static
+Static version of the libpsm_infinipath library
+
+%prep
+%setup -q
+
+%build
+%configure
+make
+
+%install
+rm -rf $RPM_BUILD_ROOT
+make DESTDIR=${RPM_BUILD_ROOT} install
+# remove unpackaged files from the buildroot
+rm -f $RPM_BUILD_ROOT%{_libdir}/*.la
+
+%clean
+rm -rf $RPM_BUILD_ROOT
+
+%post -p /sbin/ldconfig
+%postun -p /sbin/ldconfig
+%post devel -p /sbin/ldconfig
+%postun devel -p /sbin/ldconfig
+
+%files
+%defattr(-,root,root)
+%{_libdir}/libpsm_infinipath*.so.*
+%{_libdir}/libinfinipath*.so.*
+%doc COPYING AUTHORS
+
+%files devel
+%defattr(-,root,root)
+%{_libdir}/libpsm_infinipath.so
+%{_libdir}/libinfinipath.so
+%{_includedir}/*
+
+%files static
+%defattr(-,root,root)
+%{_libdir}/libpsm_infinipath.a
+%{_libdir}/libinfinipath.a
+
+%changelog
+* Mon Mar 22 2010 Ira Weiny <weiny2@llnl.gov> - 1.0.0
+- Initial creation

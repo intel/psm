@@ -135,7 +135,7 @@ cscope:
 
 ${TARGLIB}-objs := ptl_am/am_reqrep_shmem.o	\
 		   ptl_am/am_reqrep.o		\
-		   ptl_am/ptl.o			\
+		   ptl_am/ptl_am.o			\
 		   ptl_am/kcopyrwu.o		\
 		   psm_context.o		\
 		   psm_ep.o			\
@@ -152,7 +152,7 @@ ${TARGLIB}-objs := ptl_am/am_reqrep_shmem.o	\
 		   psm_memcpy.o			\
 		   psm.o			\
 		   libuuid/psm_uuid.o		\
-		   ptl_ips/ptl.o		\
+		   ptl_ips/ptl_ips.o		\
 		   ptl_ips/ptl_rcvthread.o	\
 		   ptl_ips/ipserror.o		\
 		   ptl_ips/ips_scb.o		\
@@ -174,7 +174,7 @@ ${TARGLIB}-objs := ptl_am/am_reqrep_shmem.o	\
 		   ptl_ips/ips_path_rec.o       \
 		   ptl_ips/ips_opp_path_rec.o   \
 		   ptl_ips/ips_writehdrq.o	\
-		   ptl_self/ptl.o		\
+		   ptl_self/ptl_self.o		\
 		   psm_diags.o
 
 ${TARGLIB}.so: ${lib_build_dir}/${TARGLIB}.so.${MAJOR}
