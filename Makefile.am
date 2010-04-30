@@ -40,12 +40,34 @@ INCLUDES=-I$(srcdir)/include \
 	 -I$(srcdir)/include/$(TARGET_SYSTEM)-$(TARGET_ARCH)
 
 if DEBUG
-DBGFLAGS = -ggdb -D_DEBUG_
+DBGFLAGS = -O0 -g3 -DPSM_DEBUG -funit-at-a-time -D_DEBUG_
 else
-DBGFLAGS =
+DBGFLAGS = -O3 -g3
 endif
 
-AM_CFLAGS = -Wall $(DBGFLAGS)
+if PSM_PROFILE
+PROFILE_FLGS = -DPSM_PROFILE
+else
+PROFILE_FLGS =
+endif
+
+if PSM_VALGRIND
+VALGRIND = -DPSM_VALGRIND
+else
+VALGRIND = -DNVALGRIND
+endif
+
+if PSM_USE_SYS_UUID
+SYS_UUID = -DPSM_USE_SYS_UUID
+EX_LIBS = -luuid
+else
+SYS_UUID =
+EX_LIBS =
+endif
+
+AM_CFLAGS = -fpic -fPIC -funwind-tables \
+		-Wall $(DBGFLAGS) $(PROFILE_FLGS) $(VALGRIND) \
+		$(SYS_UUID)
 
 if HAVE_LD_VERSION_SCRIPT
 libpsm_infinipath_version_script = -Wl,--version-script=$(srcdir)/src/libpsm_infinipath.map
@@ -62,7 +84,7 @@ lib_LTLIBRARIES = libinfinipath.la libpsm_infinipath.la
 #
 libinfinipathincludedir = $(includedir)
 libinfinipathinclude_HEADERS = include/ipath_user.h
-libinfinipath_la_CFLAGS = -Wall
+libinfinipath_la_CFLAGS = $(AM_CFLAGS)
 # automake does not allow variables in the "SOURCES" list
 # configure defines the CPU we are compiling for and include those files in the
 # sources only
@@ -76,6 +98,7 @@ if CPU_I386
 			ipath/ipath_write_pio-i386.c
 endif
 if CPU_PPC
+libinfinipath_la_CFLAGS += -maltivec
 	CPU_SOURCES=ipath/ipath_write_pio-ppc.c
 endif
 if CPU_PPC64
@@ -88,10 +111,11 @@ libinfinipath_la_SOURCES = ipath/ipath_debug.c \
 			ipath/ipath_i2cflash.c \
 			ipath/ipath_sysfs.c \
 			ipath/ipath_syslog.c \
+			ipath/pscrevision.c \
 			$(CPU_SOURCES)
 
 libinfinipath_la_LDFLAGS = -version-info $(infinipath_api_version) \
-    -export-dynamic $(libinfinipath_version_script)
+    -export-dynamic $(libinfinipath_version_script) $(EX_LIBS)
 libinfinipath_la_DEPENDENCIES = $(srcdir)/src/libinfinipath.map
 
 #
@@ -99,7 +123,7 @@ libinfinipath_la_DEPENDENCIES = $(srcdir)/src/libinfinipath.map
 #
 libpsm_infinipathincludedir = $(includedir)
 libpsm_infinipathinclude_HEADERS = psm.h psm_mq.h
-libpsm_infinipath_la_CFLAGS = -Wall
+libpsm_infinipath_la_CFLAGS = $(AM_CFLAGS)
 libpsm_infinipath_la_SOURCES = ptl_am/am_reqrep_shmem.c	\
 		   ptl_am/am_reqrep.c		\
 		   ptl_am/ptl_am.c		\
@@ -142,11 +166,12 @@ libpsm_infinipath_la_SOURCES = ptl_am/am_reqrep_shmem.c	\
 		   ptl_ips/ips_opp_path_rec.c   \
 		   ptl_ips/ips_writehdrq.c	\
 		   ptl_self/ptl_self.c		\
-		   psm_diags.c
+		   psm_diags.c                  \
+		   psmrevision.c
 
 libpsm_infinipath_la_LDFLAGS = -version-info $(psm_infinipath_api_version) \
     -export-dynamic $(libpsm_infinipath_version_script) \
-    -lpthread -lrt -ldl -L$(srcdir)/ipath -linfinipath
+    -lpthread -lrt -ldl -L$(srcdir)/ipath -linfinipath $(EX_LIBS)
 libpsm_infinipath_la_DEPENDENCIES = $(srcdir)/src/libpsm_infinipath.map
 
 #
@@ -162,6 +187,8 @@ EXTRA_DIST = \
 	infinipath-psm.spec \
 	libpsm_infinipath.ver \
 	libinfinipath.ver \
+	psmrevision.c.in \
+	ipath/pscrevision.c.in \
 	$(srcdir)/src/libpsm_infinipath.map \
 	$(srcdir)/src/libinfinipath.map
 

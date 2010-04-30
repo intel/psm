@@ -62,13 +62,47 @@ AC_SUBST(CCASFLAGS)
 
 dnl support debug mode
 AC_ARG_ENABLE(debug,
-[  --enable-debug Turn on debug mode],
+[  --enable-debug      Turn on debug mode (default=no)],
 [case "${enableval}" in
   yes) debug=true ;;
   no)  debug=false ;;
   *) AC_MSG_ERROR(bad value ${enableval} for --enable-debug) ;;
 esac],[debug=false])
 AM_CONDITIONAL(DEBUG, test x$debug = xtrue)
+
+dnl Profiling
+AC_ARG_ENABLE(profile,
+[  --enable-profile    Enable PSM Profiling (default=no)],
+[case "${enableval}" in
+  yes) profile=true ;;
+  no)  profile=false ;;
+  *) AC_MSG_ERROR(bad value ${enableval} for --enable-profile) ;;
+esac],[profile=false])
+AM_CONDITIONAL(PSM_PROFILE, test x$profile = xtrue)
+
+dnl Valgrind
+AC_ARG_ENABLE(valgrind,
+[  --enable-profile    Enable Valgrind (default=no)],
+[case "${enableval}" in
+  yes) valgrind=true ;;
+  no)  valgrind=false ;;
+  *) AC_MSG_ERROR(bad value ${enableval} for --enable-valgrind) ;;
+esac],[valgrind=false])
+AM_CONDITIONAL(PSM_VALGRIND, test x$valgrind = xtrue)
+
+dnl Use Sys UUID
+AC_ARG_ENABLE(sysuuid,
+[  --disable-sysuuid   Use Sys UUID (default=yes)],
+[case "${enableval}" in
+  yes) sysuuid=true ;;
+  no)  sysuuid=false ;;
+  *) AC_MSG_ERROR(bad value ${enableval} for --enable-sysuuid) ;;
+esac],[sysuuid=true])
+if test x$sysuuid = xtrue; then
+AC_CHECK_LIB(uuid, uuid_generate, [],
+        AC_MSG_ERROR([uuid_generate() not found in uuid.  Please disable sysuuid]))
+fi
+AM_CONDITIONAL(PSM_USE_SYS_UUID, test x$sysuuid = xtrue)
 
 dnl version of libpsm_infinipath
 psm_infinipath_api_version=`grep LIBVERSION $srcdir/libpsm_infinipath.ver | sed 's/LIBVERSION=//'`
@@ -83,6 +117,10 @@ if test -z $infinipath_api_version; then
     infinipath_api_version=1:0:0
 fi
 AC_SUBST(infinipath_api_version)
+
+dnl build date
+BUILD_DATE=`date +'%F %R'`
+AC_SUBST([BUILD_DATE])
 
 AC_CACHE_CHECK(whether ld accepts --version-script, ac_cv_version_script,
     if test -n "`$LD --help < /dev/null 2>/dev/null | grep version-script`"; then
@@ -146,5 +184,9 @@ AM_CONDITIONAL(CPU_X86_64, test x$cpu_x86_64 = xtrue)
 AM_CONDITIONAL(CPU_PPC, test x$cpu_ppc = xtrue)
 AM_CONDITIONAL(CPU_PPC64, test x$cpu_ppc64 = xtrue)
 
-AC_CONFIG_FILES([Makefile infinipath-psm.spec])
+AC_CONFIG_FILES([Makefile
+		infinipath-psm.spec
+		psmrevision.c
+		ipath/pscrevision.c
+		])
 AC_OUTPUT
