@@ -13,8 +13,10 @@ Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
 
 %description
-An alternative interface to QLogic InfiniBand HCA's.
-FIXME??  This needs a better description.
+The PSM Messaging API, or PSM API, is QLogic's low-level user-level
+communications interface for the Truescale family of products. PSM users are
+enabled with mechanisms necessary to implement higher level communications
+interfaces in parallel environments.
 
 %package devel
 Summary: Development files for the libpsm_infinipath library

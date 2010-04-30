@@ -83,7 +83,7 @@ lib_LTLIBRARIES = libinfinipath.la libpsm_infinipath.la
 # libinfinipath
 #
 libinfinipathincludedir = $(includedir)
-libinfinipathinclude_HEADERS = include/ipath_user.h
+libinfinipathinclude_HEADERS = 
 libinfinipath_la_CFLAGS = $(AM_CFLAGS)
 # automake does not allow variables in the "SOURCES" list
 # configure defines the CPU we are compiling for and include those files in the

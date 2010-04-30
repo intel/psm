@@ -89,7 +89,7 @@ ipath_sighdlr(int sig, siginfo_t *p1, void *ucv)
     extern char *__progname;
 
     // If this is a SIGINT do not display backtrace. Just invoke exit handlers
-    if (sig == SIGINT)
+    if ((sig == SIGINT) || (sig == SIGTERM))
       exit(1);
     
     id = snprintf(buf, sizeof buf,
@@ -155,6 +155,7 @@ static void init_ipath_backtrace(void)
         (void)sigaction(SIGILL,  &act, NULL);
         (void)sigaction(SIGABRT, &act, NULL);
 	(void)sigaction(SIGINT,  &act, NULL);
+	(void)sigaction(SIGTERM, &act, NULL);
     }
 }
 
