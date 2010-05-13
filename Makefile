@@ -59,6 +59,7 @@ ifneq (1,${USE_PSM_UUID})
     # on the package which installs the library.
     PSM_HAVE_UUID_H=$(shell if [ -f /usr/include/uuid/uuid.h ]; then echo 1; else echo 0; fi)
     ifeq (1,${PSM_HAVE_UUID_H})
+       SYS_UUID_RPM_NAME=$(shell rpm -qf --qf "%{NAME} = %{VERSION}-%{RELEASE}" /usr/include/uuid/uuid.h)
        PSM_USE_SYS_UUID=1
     endif
 endif
@@ -100,6 +101,8 @@ clean:
 	rm -f *.o ${TARGLIB}.*
 
 distclean: cleanlinks clean
+	rm -f infinipath-psm.spec
+	rm -f infinipath-psm-${MAJOR}.${MINOR}.tar.gz
 
 .PHONY: symlinks
 symlinks:
@@ -126,6 +129,33 @@ install: all
 		ln -sf ${TARGLIB}.so.${MAJOR} ${TARGLIB}.so)
 	install -D psm.h ${DESTDIR}/usr/include/psm.h
 	install -D psm_mq.h ${DESTDIR}/usr/include/psm_mq.h
+
+dist: distclean
+	sed -e 's/@VERSION@/'${MAJOR}.${MINOR}'/g' infinipath-psm.spec.in > \
+		infinipath-psm.spec
+	if [ X$(PSM_USE_SYS_UUID) = X1 ]; then \
+		REQUIRES="Requires: $(shell echo $(SYS_UUID_RPM_NAME) | sed -e 's/-devel//')" ; \
+		REQUIRESDEVEL="Requires: $(SYS_UUID_RPM_NAME)" ; \
+		sed -i -e 's/@REQUIRES@/'"$${REQUIRES}"'/g' \
+			-e 's/@REQUIRES-DEVEL@/'"$$REQUIRESDEVEL"'/g' \
+			-e 's/@PSM_UUID@//g' infinipath-psm.spec ; \
+	else \
+		sed -i -e '/@REQUIRES@/d' \
+			-e '/@REQUIRES-DEVEL@/d' \
+			-e 's/@PSM_UUID@/USE_PSM_UUID=1/g' infinipath-psm.spec ; \
+	fi
+	mkdir -p infinipath-psm-${MAJOR}.${MINOR}
+	for x in $$(/usr/bin/find . -name ".git" -prune -o \
+			-name "cscope*" -prune -o \
+			-name "*.spec.in" -prune -o \
+			-name "infinipath-psm-${MAJOR}.${MINOR}" -prune -o \
+			-print); do \
+		dir=$$(dirname $$x); \
+		mkdir -p infinipath-psm-${MAJOR}.${MINOR}/$$dir; \
+		[ ! -d $$x ] && cp $$x infinipath-psm-${MAJOR}.${MINOR}/$$dir; \
+	done
+	tar czvf infinipath-psm-${MAJOR}.${MINOR}.tar.gz infinipath-psm-${MAJOR}.${MINOR}
+	rm -rf infinipath-psm-${MAJOR}.${MINOR}
 
 # rebuild the cscope database, skipping sccs files, done once for
 # top level

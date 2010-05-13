@@ -5,11 +5,13 @@ Release: 1
 License: GPL
 Group: System Environment/Libraries
 URL: http://www.qlogic.com/
-Source0: %{name}-%{version}.tgz
+Source0: %{name}-%{version}.tar.gz
 Prefix: /usr
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
 Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
+@REQUIRES@
+Conflicts: infinipath-libs
 
 %package devel
 Summary: Development files for QLogic PSM
@@ -17,6 +19,8 @@ Group: System Environment/Development
 Requires: %{name} = %{version}-%{release}
 Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
+@REQUIRES-DEVEL@
+Conflicts: infinipath-libs-devel
 
 %description
 The PSM Messaging API, or PSM API, is QLogic's low-level
@@ -32,7 +36,7 @@ Development files for the libpsm_infinipath library
 %setup -q
 
 %build
-%{__make}
+%{__make} @PSM_UUID@
 
 %install
 rm -rf $RPM_BUILD_ROOT
@@ -62,6 +66,6 @@ rm -rf $RPM_BUILD_ROOT
 
 
 %changelog
-* Tue May 11 2010 Mitko Haralanov <mitko@qlogic.com> - 1.13-1
+* Tue May 11 2010 Mitko Haralanov <mitko@qlogic.com> - @VERSION@-1
 - Initial build.
 
