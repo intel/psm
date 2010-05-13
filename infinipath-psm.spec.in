@@ -20,7 +20,7 @@ Requires: %{name} = %{version}-%{release}
 Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
 @REQUIRES-DEVEL@
-Conflicts: infinipath-libs-devel
+Conflicts: infinipath-devel
 
 %description
 The PSM Messaging API, or PSM API, is QLogic's low-level
