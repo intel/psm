@@ -44,7 +44,12 @@ Building has only been tested on RHEL 5.3 though other linux distributions
 should work as well. Build requires that GNU GCC compiler is installed on 
 the machine doing the build. Root privileges are required to install the
 runtime libraries and development header files into standard system location.
+There are two mechanisms for building PSM:
+  1. Use provided Makefiles to build and install
+  2. Generate a tarball that can be used to build source and binary RPMs
 
+Building from Makefiles
+-----------------------
 1. Untar the tarball:
 	$ tar zxvf InfiniPath-PSM.tar.gz
 2. Change directory into the untarred location:
@@ -71,6 +76,29 @@ install all files (libraries and headers) into "/tmp/psm-install/usr/...",
 libraries in "/tmp/psm-install/libraries" and the headers in
 "/tmp/psm-install/usr/include", and "make LIBDIR=/tmp/libs install" will
 install the libraries in "/tmp/libs" and the headers in "/usr/include".
+
+Generating PSM source and binary RPMs
+--------------------------------------
+This is a two step process: Generate a PSM distribution tarball which can then
+be used to generate source and binary RPMs using the rpmbuild command with the
+-ta option.
+1. Untar the tarball:
+	$ tar zxvf InfiniPath-PSM.tar.gz
+2. Change directory into the untarred location:
+	$ cd InfiniPath-PSM
+3. Generate distribution tarball
+   	$ make dist
+   To force compiling with the included libuuid, use the USE_PSM_UUID variable:
+        $ make dist USE_PSM_UUID=1
+   Note: It is recommended if you are planning on doing cross distribution
+builds to use the included libuuid i.e. If you are generating the distribution
+tarball on a RHEL machine but may use rpmbuild on a SuSE SLES machine. This
+minimized any cross distribution dependencies for the package.
+4. Generate source and binary packages
+   	$ rpmbuild -ta infinipath-psm-1.13.tar.gz
+   Please refere to the man page of rpmbuild for other options in generating
+RPMs. The generated RPMs are relocatable so one can provide the prefix option
+to retarget the installation location.
 
 If you run into any issues during build please post any questions with as much 
 information as possible to the psm-devel mailing list. Please include the 

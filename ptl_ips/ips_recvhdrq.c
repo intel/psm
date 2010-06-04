@@ -511,7 +511,8 @@ ips_recvhdrq_progress(struct ips_recvhdrq *recvq)
 
 	dest_subcontext  = _get_proto_subcontext(rcv_ev.p_hdr);
 
-	if_pf (_check_headers(&rcv_ev))
+	if_pf ((recvq->runtime_flags & IPATH_RUNTIME_RCHK) &&
+	       (_check_headers(&rcv_ev)))
 	  goto skip_packet;
 
         if_pf (rcv_ev.error_flags || 
