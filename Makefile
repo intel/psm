@@ -69,6 +69,12 @@ top_srcdir := .
 include $(top_srcdir)/buildflags.mak
 lib_build_dir := $(build_dir)
 
+ifneq (x86_64,$(arch))
+   ifneq (i386,$(arch))
+      $(error Unsupported architecture $(arch))
+   endif
+endif
+
 ifndef LIBDIR
    ifeq (${arch},x86_64)
       INSTALL_LIB_TARG=/usr/lib64
@@ -95,6 +101,7 @@ all: symlinks
 	$(MAKE) ${TARGLIB}.so
 
 clean:
+	rm -f _revision.c
 	for subdir in $(SUBDIRS); do \
 		$(MAKE) -C $$subdir $@ ;\
 	done

@@ -93,4 +93,5 @@ ipath_write_pio-ppc64.o: ipath_write_pio-ppc64.c
 	$(CC) $(CFLAGS) -maltivec $(INCLUDES) -c $< -o $@
 
 clean:
+	rm -f _revision.c
 	rm -f *.o ${TARGLIB}.*
