@@ -40,7 +40,7 @@
 #define PSMI_SHARED_CONTEXTS_ENABLED_BY_DEFAULT   1
 static uint32_t psmi_get_num_contexts(int unit_id);
 static int	psmi_sharedcontext_params(int *nranks, int *rankid);
-
+static int      psmi_get_hca_selection_algorithm(void);
 static psm_error_t psmi_init_userinfo_params(int unit_id, int port,
 		    psm_uuid_t const unique_job_key,
 		    struct ipath_user_info *user_info);
@@ -434,6 +434,7 @@ psmi_init_userinfo_params(int unit_id, int port,
     user_info->spu_userversion = IPATH_USER_SWVERSION;
     user_info->spu_subcontext_id = 0;
     user_info->spu_subcontext_cnt = 0;
+    user_info->spu_port_alg = psmi_get_hca_selection_algorithm();
 
     shcontexts_enabled = psmi_sharedcontext_params(&nranks, &rankid);
 
@@ -616,4 +617,32 @@ psmi_sharedcontext_params(int *nranks, int *rankid)
 	*nranks = env_nranks.e_int;
     }
     return 1;
+}
+
+static 
+int      
+psmi_get_hca_selection_algorithm(void)
+{
+  union psmi_envvar_val env_hca_alg;
+  int hca_alg = IPATH_PORT_ALG_ACROSS;
+
+  /* If a specific unit is set in the environment, use that one. */
+  psmi_getenv("IPATH_HCA_SELECTION_ALG", 
+	      "HCA Device Selection Algorithm to use. Round Robin (Default) "
+	      "or Packed",
+	      PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_STR,
+	      (union psmi_envvar_val) "Round Robin",
+	      &env_hca_alg);
+
+  if (!strcasecmp(env_hca_alg.e_str, "Round Robin"))
+    hca_alg = IPATH_PORT_ALG_ACROSS;
+  else if (!strcasecmp(env_hca_alg.e_str, "Packed"))
+    hca_alg = IPATH_PORT_ALG_WITHIN;
+  else {
+    _IPATH_ERROR("Unknown HCA selection algorithm %s. Defaultng to Round Robin "
+		 "allocation of HCAs.\n", env_hca_alg.e_str);
+    hca_alg = IPATH_PORT_ALG_ACROSS;
+  }
+  
+  return hca_alg;
 }
