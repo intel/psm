@@ -161,6 +161,7 @@ dist: distclean
 		mkdir -p infinipath-psm-${MAJOR}.${MINOR}/$$dir; \
 		[ ! -d $$x ] && cp $$x infinipath-psm-${MAJOR}.${MINOR}/$$dir; \
 	done
+	git log -n1 --pretty=format:%H > infinipath-psm-${MAJOR}.${MINOR}/COMMIT
 	tar czvf infinipath-psm-${MAJOR}.${MINOR}.tar.gz infinipath-psm-${MAJOR}.${MINOR}
 	rm -rf infinipath-psm-${MAJOR}.${MINOR}
 
