@@ -165,6 +165,9 @@ dist: distclean
 	tar czvf infinipath-psm-${MAJOR}.${MINOR}.tar.gz infinipath-psm-${MAJOR}.${MINOR}
 	rm -rf infinipath-psm-${MAJOR}.${MINOR}
 
+ofeddist:
+	USE_PSM_UUID=1 $(MAKE) dist
+
 # rebuild the cscope database, skipping sccs files, done once for
 # top level
 cscope:
