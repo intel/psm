@@ -1014,8 +1014,20 @@ ips_proto_connect(struct ips_proto *proto, int numep,
     uint64_t t_start = get_cycles();
     /* Print a timeout every 30 seconds or at least once if the connect timeout
      * is less than 30seconds */
-    uint64_t to_warning_interval = nanosecs_to_cycles(30*SEC_ULL);
-    uint64_t to_warning_next = t_start + to_warning_interval;
+    union psmi_envvar_val warn_intval;
+    uint64_t to_warning_interval;
+    uint64_t to_warning_next;
+
+    /* Setup warning interval - default is 30 seconds */
+    psmi_getenv("PSM_CONNECT_WARN_INTERVAL",
+		"Period in seconds to warn if connections are not completed."
+		"Default is 30 seconds.",
+		PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_UINT,
+		(union psmi_envvar_val) 30,
+		&warn_intval);
+    
+    to_warning_interval = nanosecs_to_cycles(warn_intval.e_uint * SEC_ULL);
+    to_warning_next = t_start + to_warning_interval;
 
     /* Some sanity checks */
     psmi_assert_always(sizeof(struct connect_msghdr) == IPS_CONNECT_MSGHDR_SIZE);
