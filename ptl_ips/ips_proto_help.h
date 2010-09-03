@@ -261,7 +261,7 @@ uint32_t ips_proto_dest_context_from_header(struct ips_proto *proto,
   case PSMI_HCA_TYPE_QLE72XX:
     /* Context 16 is special cased on QLE72XX */
     dest_context |= ((__be32_to_cpu(p_hdr->bth[1]) & 1) << 4);
-    if (dest_context == 0x1ffff)
+    if (dest_context == 0x1f)
       dest_context = 16;
     break;
   case PSMI_HCA_TYPE_QLE71XX:
