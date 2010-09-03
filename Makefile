@@ -137,7 +137,7 @@ install: all
 	install -D psm.h ${DESTDIR}/usr/include/psm.h
 	install -D psm_mq.h ${DESTDIR}/usr/include/psm_mq.h
 
-dist: distclean
+specfile:
 	sed -e 's/@VERSION@/'${MAJOR}.${MINOR}'/g' infinipath-psm.spec.in > \
 		infinipath-psm.spec
 	if [ X$(PSM_USE_SYS_UUID) = X1 ]; then \
@@ -151,6 +151,8 @@ dist: distclean
 			-e '/@REQUIRES-DEVEL@/d' \
 			-e 's/@PSM_UUID@/USE_PSM_UUID=1/g' infinipath-psm.spec ; \
 	fi
+
+dist: distclean specfile
 	mkdir -p infinipath-psm-${MAJOR}.${MINOR}
 	for x in $$(/usr/bin/find . -name ".git" -prune -o \
 			-name "cscope*" -prune -o \
