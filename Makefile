@@ -69,14 +69,14 @@ top_srcdir := .
 include $(top_srcdir)/buildflags.mak
 lib_build_dir := $(build_dir)
 
-ifneq (x86_64,$(shell uname -m))
-   ifneq (i386,$(shell uname -m))
-      $(error Unsupported architecture $(shell uname -m))
+ifneq (x86_64,$(arch))
+   ifneq (i386,$(arch))
+      $(error Unsupported architecture $(arch))
    endif
 endif
 
 ifndef LIBDIR
-   ifeq ($(shell uname -m),x86_64)
+   ifeq (${arch},x86_64)
       INSTALL_LIB_TARG=/usr/lib64
    else
       INSTALL_LIB_TARG=/usr/lib
