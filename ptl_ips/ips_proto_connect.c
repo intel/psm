@@ -376,7 +376,7 @@ ips_flow_init(struct ips_flow *flow, ips_path_rec_t *path, ips_epaddr_t *ipsaddr
     
     flow->path = path;
     flow->ipsaddr = ipsaddr;
-    flow->epinfo  = &ipsaddr->proto->epinfo;
+    flow->epinfo  = &proto->epinfo;
     flow->transfer= transfer_type;
     flow->protocol= protocol;
     flow->flowid  = IPS_FLOWID_PACK(protocol, flow_index);
@@ -386,7 +386,8 @@ ips_flow_init(struct ips_flow *flow, ips_path_rec_t *path, ips_epaddr_t *ipsaddr
     flow->flags = 0;
     flow->sl    = flow->path->epr_sl;
     flow->cca_ooo_pkts = 0;			    
-
+    flow->credits = flow->cwin = proto->flow_credits;
+    flow->ack_interval = max((proto->flow_credits >> 2) - 1, 1);
     flow->scb_num_pending = 0;
     flow->scb_num_unacked = 0;
     flow->xmit_egrlong.egr_flowid = flow_index;

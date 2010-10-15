@@ -50,7 +50,8 @@ struct ips_am_token {
 
 psm_error_t
 ips_proto_am_init(struct ips_proto *proto,
-		  int num_of_send_bufs, struct ips_proto_am *proto_am)
+		  int num_of_send_bufs, int num_of_send_desc,
+		  uint32_t imm_size, struct ips_proto_am *proto_am)
 {
     psm_error_t err = PSM_OK;
     int send_buf_size = proto->scb_bufsize;
@@ -58,8 +59,8 @@ ips_proto_am_init(struct ips_proto *proto,
     proto_am->proto = proto;
     proto_am->scbc_request = &proto->scbc_egr;
 
-    if ((err = ips_scbctrl_init(&proto->ep->context, num_of_send_bufs,
-				num_of_send_bufs, send_buf_size,
+    if ((err = ips_scbctrl_init(&proto->ep->context, num_of_send_desc,
+				num_of_send_bufs, imm_size, send_buf_size,
 				NULL, NULL, &proto_am->scbc_reply)))
 	goto fail;
 fail:
@@ -194,18 +195,28 @@ ips_am_short_request(ptl_t *ptl, psm_epaddr_t epaddr,
     struct ips_proto_am *proto_am = &ptl->proto.proto_am;
     psm_error_t err;
     ips_scb_t *scb;
-    int scb_flags = flags & PSM_AM_FLAG_ASYNC ? 0 : IPS_SCB_FLAG_ADD_BUFFER;
     int pad_bytes = calculate_pad_bytes(proto_am, nargs, len);
-
-    if (nargs > PSM_AM_HDR_QWORDS || pad_bytes) {
-      /* No iovecs yet, we need a bounce buffer to fit all the arguments */
-      /* Or the padding bytes need a safe copy of the source data */
-      scb_flags |= IPS_SCB_FLAG_ADD_BUFFER;
+    int payload_sz = (nargs << 3) + pad_bytes;
+    
+    if_pt (!(flags & PSM_AM_FLAG_ASYNC))
+      payload_sz += len;
+    
+    if (payload_sz > (PSM_AM_HDR_QWORDS << 3)) {
+      /* Payload can't fit in header - allocate buffer to carry data */
+      int arg_sz = (nargs > PSM_AM_HDR_QWORDS) ? 
+	((nargs - PSM_AM_HDR_QWORDS) << 3) : 0;
+      
+      /* len + pad_bytes + overflow_args */
+      PSMI_BLOCKUNTIL(ptl->ep,err,
+	((scb = ips_scbctrl_alloc(proto_am->scbc_request, 1, 
+				  len + pad_bytes + arg_sz,
+				  IPS_SCB_FLAG_ADD_BUFFER)) != NULL));
     }
-    
-    PSMI_BLOCKUNTIL(ptl->ep,err,
-    ((scb = ips_scbctrl_alloc(proto_am->scbc_request, 1, scb_flags)) != NULL));
-    
+    else {
+      PSMI_BLOCKUNTIL(ptl->ep,err,
+	   ((scb = ips_scbctrl_alloc_tiny(&proto_am->scbc_reply)) != NULL));
+    }
+
     psmi_assert_always(scb != NULL);
     ips_am_scb_init(scb, handler, nargs, epaddr->ptladdr, pad_bytes,
 		    completion_fn, completion_ctxt);
@@ -227,9 +238,9 @@ ips_am_short_reply(psm_am_token_t tok,
     struct ips_am_token *token = (struct ips_am_token *) tok;
     struct ips_proto_am *proto_am = token->proto_am;
     struct ptl_epaddr *ipsaddr = token->tok.epaddr_from->ptladdr;
-    int scb_flags = flags & PSM_AM_FLAG_ASYNC ? 0 : IPS_SCB_FLAG_ADD_BUFFER;
+    int scb_flags = 0;
     int pad_bytes = calculate_pad_bytes(proto_am, nargs, len);
-
+    
     if (!token->tok.can_reply) {
       /* Trying to reply for an AM request that did not expect a reply */
       _IPATH_ERROR("Invalid AM reply for request!");
@@ -243,7 +254,13 @@ ips_am_short_reply(psm_am_token_t tok,
       scb = ips_scbctrl_alloc_tiny(&proto_am->scbc_reply);
     }
     else {
-      scb = ips_scbctrl_alloc(&proto_am->scbc_reply, 1, scb_flags);
+      int payload_sz = (nargs << 3) + pad_bytes;
+      
+      payload_sz += (flags & PSM_AM_FLAG_ASYNC) ? 0 : len;
+      scb_flags |= (payload_sz > (PSM_AM_HDR_QWORDS << 3)) ? 
+	IPS_SCB_FLAG_ADD_BUFFER : 0;
+      
+      scb = ips_scbctrl_alloc(&proto_am->scbc_reply, 1, payload_sz, scb_flags);
     }
     
     psmi_assert_always(scb != NULL);
@@ -320,14 +337,15 @@ ips_proto_am(const struct ips_recvhdrq_event *rcv_ev)
     
     if (!ips_proto_is_expected_or_nak((struct ips_recvhdrq_event*) rcv_ev))
       return ret;
-
+    
     /* run handler */
     if (ips_am_run_handler(&token, rcv_ev))
       ret = IPS_RECVHDRQ_BREAK;
 
-    /* Look if the handler replied, if it didn't, ack the request */
-    if (p_hdr->flags & IPS_SEND_FLAG_ACK_REQ) 
+    /* Look if the handler replied, if it didn't, ack the request */    
+    if ((p_hdr->flags & IPS_SEND_FLAG_ACK_REQ)  ||
+	(flow->flags & IPS_FLOW_FLAG_GEN_BECN))
       ips_proto_send_ack((struct ips_recvhdrq *) rcv_ev->recvq, flow);
-    
+
     return ret;
 }

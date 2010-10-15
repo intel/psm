@@ -193,6 +193,8 @@ ips_ptl_init(const psm_ep_t ep, ptl_t *ptl, ptl_ctl_t *ctl)
 {
     psm_error_t err = PSM_OK;
     uint32_t num_of_send_bufs = ep->ipath_num_sendbufs;
+    uint32_t num_of_send_desc = ep->ipath_num_descriptors;
+    uint32_t imm_size = ep->ipath_imm_size;
     const psmi_context_t *context = &ep->context;
     const struct ipath_user_info *user_info = &context->user_info;
     const int enable_shcontexts = (user_info->spu_subcontext_cnt > 0);
@@ -286,9 +288,9 @@ ips_ptl_init(const psm_ep_t ep, ptl_t *ptl, ptl_ctl_t *ctl)
     /*
      * Actual ips protocol handling.
      */
-    if ((err = ips_proto_init(context, ptl, num_of_send_bufs, 
-			      &ptl->timerq, &ptl->epstate, &ptl->spioc, 
-			      &ptl->proto)))
+    if ((err = ips_proto_init(context, ptl, num_of_send_bufs, num_of_send_desc,
+			      imm_size, &ptl->timerq, &ptl->epstate, 
+			      &ptl->spioc, &ptl->proto)))
 	goto fail;
 
     /*

@@ -42,7 +42,7 @@
 PSMI_NEVER_INLINE(
 ips_scb_t * __sendpath
 ips_poll_scb(struct ips_proto *proto,
-	     int npkts, uint32_t flags, int istiny))
+	     int npkts, int len, uint32_t flags, int istiny))
 {
     ips_scb_t *scb = NULL;
     psmi_assert(npkts > 0);
@@ -52,8 +52,8 @@ ips_poll_scb(struct ips_proto *proto,
 
     PSMI_BLOCKUNTIL(proto->ep,err,
 	((scb = istiny ? 
-		ips_scbctrl_alloc_tiny(&proto->scbc_egr) :
-		ips_scbctrl_alloc(&proto->scbc_egr, npkts, flags)) != NULL));
+	  ips_scbctrl_alloc_tiny(&proto->scbc_egr) :
+	  ips_scbctrl_alloc(&proto->scbc_egr, npkts, len, flags)) != NULL));
     return scb;
 }
 
@@ -66,20 +66,20 @@ mq_alloc_tiny(struct ips_proto *proto))
     if_pt (scb != NULL) 
         return scb;
     else 
-	return ips_poll_scb(proto, 1, 0, 1);
+       return ips_poll_scb(proto, 1, 0, 0, 1);
 }
 
 PSMI_ALWAYS_INLINE(
 ips_scb_t * 
-mq_alloc_pkts(struct ips_proto *proto, int npkts, uint32_t flags))
+mq_alloc_pkts(struct ips_proto *proto, int npkts, int len, uint32_t flags))
 {
     psmi_assert(npkts > 0);
-    ips_scb_t* scb = ips_scbctrl_alloc(&proto->scbc_egr, npkts, flags);
+    ips_scb_t* scb = ips_scbctrl_alloc(&proto->scbc_egr, npkts, len, flags);
     if_pt (scb != NULL) {
         return scb;
     }
     else {
-	return ips_poll_scb(proto, npkts, flags, 0 /* not tiny scb */);
+        return ips_poll_scb(proto, npkts, len, flags, 0 /* not tiny scb */);
     }
 }
 
@@ -189,6 +189,7 @@ ips_mq_send_payload(ptl_t *ptl, ips_epaddr_t *ipsaddr, psmi_egrid_t egrid,
     
     do {
 	scb = mq_alloc_pkts(proto, MQ_NUM_MTUS(nbytes_left, frag_size),
+			    nbytes_left, 
 			    is_blocking ? IPS_SCB_FLAG_ADD_BUFFER : 0);
 	ips_scb_t *curscb = scb;
 
@@ -381,7 +382,8 @@ ips_proto_mq_isend(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 	
         if_pf ((pad_write_bytes + len) > ipsaddr->epr.epr_piosize)
 	  pad_write_bytes = 0;
-	scb = mq_alloc_pkts(proto, 1, IPS_SCB_FLAG_ADD_BUFFER);
+	scb = mq_alloc_pkts(proto, 1, (len + pad_write_bytes),
+			    IPS_SCB_FLAG_ADD_BUFFER);
 	ips_scb_epaddr(scb) = ipsaddr;
 	ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_CTRL;
 	ips_scb_hdr_dlen(scb) = pad_write_bytes;
@@ -403,7 +405,7 @@ ips_proto_mq_isend(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 
 	req->buf = (uint8_t *) buf;
 	req->buf_len = len;
-	scb = mq_alloc_pkts(proto, 1, 0);
+	scb = mq_alloc_pkts(proto, 1, 0, 0);
 
 	if (len < proto->iovec_thresh_eager) {
 	    pktlen = len <= 2*ipsaddr->epr.epr_piosize ?  len / 2
@@ -510,7 +512,8 @@ ips_proto_mq_send(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
         if_pf ((pad_write_bytes + len) > ipsaddr->epr.epr_piosize)
 	  pad_write_bytes = 0;
 
-	scb = mq_alloc_pkts(proto, 1, IPS_SCB_FLAG_ADD_BUFFER);
+	scb = mq_alloc_pkts(proto, 1, (len + pad_write_bytes),
+			    IPS_SCB_FLAG_ADD_BUFFER);
 	ips_scb_epaddr(scb) = ipsaddr;
 	ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_CTRL;
 	ips_scb_hdr_dlen(scb) = pad_write_bytes;
@@ -529,8 +532,6 @@ ips_proto_mq_send(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 	psmi_egrid_t egrid;
 	struct ips_flow *flow;
 
-	scb = mq_alloc_pkts(proto, 1, IPS_SCB_FLAG_ADD_BUFFER);
-
 	if (len < proto->iovec_thresh_eager_blocking) {
 	    pktlen = len <= 2*ipsaddr->epr.epr_piosize ?  len / 2
 	                  : min(len, ipsaddr->epr.epr_piosize );
@@ -544,6 +545,8 @@ ips_proto_mq_send(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 	    pktlen = ipsaddr->epr.epr_piosize;
 	}
 	
+	scb = mq_alloc_pkts(proto, 1, pktlen, IPS_SCB_FLAG_ADD_BUFFER);
+		
 	ips_scb_epaddr(scb) = ipsaddr;
 	ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_CTRL;
 	ips_scb_length(scb) = pktlen;
@@ -650,7 +653,7 @@ ips_proto_mq_push_eager_req(struct ips_proto *proto, psm_mq_req_t req)
     ips_epaddr_t *ipsaddr;
     struct ips_flow *flow;
 
-    scb = ips_scbctrl_alloc(&proto->scbc_egr, 1, 0);
+    scb = ips_scbctrl_alloc(&proto->scbc_egr, 1, 0, 0);
     if (scb == NULL)
 	return PSM_OK_NO_PROGRESS;
 
@@ -691,7 +694,7 @@ ips_proto_mq_push_eager_data(struct ips_proto *proto, psm_mq_req_t req)
     psmi_assert(nbytes_left > 0);
 
     while (nbytes_left > 0) {
-	scb = ips_scbctrl_alloc(proto->scbc_rv, 1, 0);
+      scb = ips_scbctrl_alloc(proto->scbc_rv, 1, 0, 0);
 	if (scb == NULL)
 	    return PSM_OK_NO_PROGRESS;
 	

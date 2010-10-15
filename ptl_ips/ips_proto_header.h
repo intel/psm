@@ -162,6 +162,9 @@ struct ips_message_header {
 #define OPCODE_CLOSE 0x50
 #define OPCODE_CLOSE_ACK 0x51
 
+/* Explicit CCA related messages */
+#define OPCODE_FLOW_CCA_BECN 0x80
+
 /*
  * like OPCODE_CLOSE, but no complaint if other side has already closed.
  * Used when doing abort(), MPI_Abort(), etc.

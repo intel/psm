@@ -35,6 +35,7 @@
  * IPS - Interconnect Protocol Stack.
  */
 
+#include <assert.h>
 #include <sys/uio.h> /* writev */
 #include "psm_user.h"
 #include "ipserror.h"
@@ -82,6 +83,7 @@ static uint32_t message_type_to_index[256];
 #define CTRL_MSG_TIDS_GRANT_QUEUED		0x2000
 #define CTRL_MSG_TIDS_GRANT_ACK_QUEUED		0x4000
 #define CTRL_MSG_ERR_CHK_GEN_QUEUED             0x8000
+#define CTRL_MSG_FLOW_CCA_BECN                  0x10000
 
 #define CTRL_MSG_QUEUE_ALWAYS 0x80000000
 
@@ -95,7 +97,7 @@ static psm_error_t proto_sdma_init(struct ips_proto *proto,
 
 psm_error_t
 ips_proto_init(const psmi_context_t *context, const ptl_t *ptl, 
-	       int num_of_send_bufs, 
+	       int num_of_send_bufs, int num_of_send_desc, uint32_t imm_size,
 	       const struct psmi_timer_ctrl *timerq, 
 	       const struct ips_epstate *epstate, 
 	       const struct ips_spio *spioc, 
@@ -166,7 +168,7 @@ ips_proto_init(const psmi_context_t *context, const ptl_t *ptl,
 
     proto->iovec_cntr_next_inflight = 0;
     proto->iovec_thresh_eager= proto->iovec_thresh_eager_blocking = ~0U;
-    proto->scb_max_inflight  = 2*num_of_send_bufs;
+    proto->scb_max_inflight  = 2*num_of_send_desc;
     proto->scb_bufsize	     = PSMI_ALIGNUP(max(base_info->spi_piosize, 
 						base_info->spi_mtu),
 					    PSMI_PAGESIZE),
@@ -194,6 +196,19 @@ ips_proto_init(const psmi_context_t *context, const ptl_t *ptl,
       
       if (env_coalesce_acks.e_uint) 
 	proto->flags |= IPS_PROTO_FLAG_COALESCE_ACKS;
+    }
+    
+    {
+      /* Number of credits per flow */
+      union psmi_envvar_val env_flow_credits;
+      int df_flow_credits = min(PSM_FLOW_CREDITS, num_of_send_desc);
+      
+      psmi_getenv("PSM_FLOW_CREDITS",
+		 "Number of unacked packets (credits) per flow (default is 64)",
+		  PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_UINT,
+		  (union psmi_envvar_val) df_flow_credits,
+		  &env_flow_credits);
+      proto->flow_credits = env_flow_credits.e_uint;
     }
     
     if ((context->runtime_flags & IPATH_RUNTIME_SDMA)) 
@@ -309,8 +324,8 @@ ips_proto_init(const psmi_context_t *context, const ptl_t *ptl,
      * Eager buffers.  We don't care to receive a callback when eager buffers
      * are newly released since we actively poll for new bufs.
      */
-    if ((err = ips_scbctrl_init(context, num_of_send_bufs,
-		num_of_send_bufs, proto->scb_bufsize,
+    if ((err = ips_scbctrl_init(context, num_of_send_desc,
+	        num_of_send_bufs, imm_size, proto->scb_bufsize,
 		NULL, NULL, &proto->scbc_egr)))
 	goto fail;
 
@@ -330,7 +345,8 @@ ips_proto_init(const psmi_context_t *context, const ptl_t *ptl,
     if (protoexp_flags & IPS_PROTOEXP_FLAG_ENABLED) {
 	proto->scbc_rv = NULL;
 	if ((err = ips_protoexp_init(context, proto, protoexp_flags,
-				     num_of_send_bufs, &proto->protoexp)))
+				     num_of_send_bufs, num_of_send_desc,
+				     &proto->protoexp)))
 	    goto fail;
     }
     else {
@@ -348,8 +364,8 @@ ips_proto_init(const psmi_context_t *context, const ptl_t *ptl,
 	 * schedule them on the timerq if there are pending sends and available
 	 * bufs.
 	 */
-	if ((err = ips_scbctrl_init(context, num_of_send_bufs, 0 /* no bufs */, 
-		    0 /* bufsize==0 */, ips_proto_rv_scbavail_callback,
+	if ((err = ips_scbctrl_init(context, num_of_send_desc, 0 /* no bufs */, 
+		    0, 0 /* bufsize==0 */, ips_proto_rv_scbavail_callback,
 		    proto, proto->scbc_rv)))
 	    goto fail;
     }
@@ -395,7 +411,8 @@ ips_proto_init(const psmi_context_t *context, const ptl_t *ptl,
      * request handler can only be run if we have at least one reply buffer (or
      * else the AM request is dropped).
      */
-    if ((err = ips_proto_am_init(proto, num_of_send_bufs, &proto->proto_am)))
+    if ((err = ips_proto_am_init(proto, num_of_send_bufs, num_of_send_desc,
+				 imm_size, &proto->proto_am)))
 	goto fail;
 
     if (!init_once) {
@@ -632,6 +649,7 @@ ctrlq_init(struct ips_ctrlq *ctrlq, int flowid, struct ips_proto *proto)
     message_type_to_index[OPCODE_TIDS_GRANT] = CTRL_MSG_TIDS_GRANT_QUEUED;
     message_type_to_index[OPCODE_TIDS_GRANT_ACK] = CTRL_MSG_TIDS_GRANT_ACK_QUEUED;
     message_type_to_index[OPCODE_ERR_CHK_GEN] = CTRL_MSG_ERR_CHK_GEN_QUEUED;
+    message_type_to_index[OPCODE_FLOW_CCA_BECN] = CTRL_MSG_FLOW_CCA_BECN;
 
     ctrlq->ctrlq_head = ctrlq->ctrlq_tail = 0;
     ctrlq->ctrlq_overflow = 0;
@@ -667,7 +685,7 @@ _build_ctrl_message(struct ips_proto *proto,
     struct ips_message_header *p_hdr = &msg->pbc_hdr.hdr;
     ips_path_rec_t *ctrl_path = ipsaddr->epr.epr_path[IPS_PATH_HIGH_PRIORITY][ipsaddr->epr.epr_hpp_index];
     int paylen = 0;
-
+    
     if ((proto->flags & IPS_PROTO_FLAG_PPOLICY_ADAPTIVE)  &&
 	(++ipsaddr->epr.epr_hpp_index >=
 	 ipsaddr->epr.epr_num_paths[IPS_PATH_HIGH_PRIORITY]))
@@ -686,7 +704,7 @@ _build_ctrl_message(struct ips_proto *proto,
 
     /* If flow is congested then generate a BECN for path. */
     if_pf (flow->flags & IPS_FLOW_FLAG_GEN_BECN) {
-      _IPATH_CCADBG("Generating BECN for flow %x ----> %x. Num congested packets: 0x%"PRIx64"\n", __be16_to_cpu(flow->path->epr_slid), __be16_to_cpu(flow->path->epr_dlid), ipsaddr->stats.congestion_pkts);
+      _IPATH_CCADBG("Generating BECN for flow %x ----> %x. Num congested packets: 0x%"PRIx64". Msg type: %d\n", __be16_to_cpu(flow->path->epr_slid), __be16_to_cpu(flow->path->epr_dlid), ipsaddr->stats.congestion_pkts, message_type);
       p_hdr->bth[1] = __cpu_to_be32(epr->epr_qp | 1 << BTH_BECN_SHIFT);
       flow->flags &= ~IPS_FLOW_FLAG_GEN_BECN;
     }
@@ -736,8 +754,9 @@ _build_ctrl_message(struct ips_proto *proto,
       break;
 
     case OPCODE_NAK:
-      if_pf (flow->protocol != PSM_PROTOCOL_TIDFLOW)
+      if_pf (flow->protocol != PSM_PROTOCOL_TIDFLOW) {
 	p_hdr->ack_seq_num = flow->recv_seq_num.psn;
+      }
       else {
 	ptl_arg_t *args = (ptl_arg_t*) payload;
 	uint32_t tid_recv_sessid;
@@ -832,6 +851,12 @@ _build_ctrl_message(struct ips_proto *proto,
 	else
 	  *discard_msg = 1;
       }
+      break;
+      
+    case OPCODE_FLOW_CCA_BECN:
+      _IPATH_CCADBG("Generating Explicit BECN for flow %x ----> %x. Num congested packets: 0x%"PRIx64"\n", __be16_to_cpu(flow->path->epr_slid), __be16_to_cpu(flow->path->epr_dlid), ipsaddr->stats.congestion_pkts);
+      p_hdr->bth[1] = __cpu_to_be32(epr->epr_qp | 1 << BTH_BECN_SHIFT);
+      p_hdr->data[0].u32w0 = flow->cca_ooo_pkts;
       break;
       
     case OPCODE_ERR_CHK_BAD:
@@ -943,7 +968,7 @@ ips_proto_send_ctrl_message(struct ips_flow *flow, uint8_t message_type,
 	    (message_type == OPCODE_ERR_CHK_BAD)) {
 	  switch(flow->transfer) {
 	  case PSM_TRANSFER_PIO:
-	  case PSM_TRANSFER_LAST: 
+	  case PSM_TRANSFER_LAST:
 	    err = ips_spio_transfer_frame(proto->spioc, flow, &msg.pbc_hdr.hdr, 
 					  payload, paylen, PSMI_TRUE,
 					  (proto->flags & IPS_PROTO_FLAG_CKSUM),
@@ -1147,8 +1172,12 @@ ips_proto_flow_flush_pio(struct ips_flow *flow, int *nflushed)
     uint64_t t_cyc;
     ips_scb_t *scb;
     psm_error_t err = PSM_OK;
-    
-    while (!SLIST_EMPTY(scb_pend)) {
+
+    /* Out of credits - ACKs/NAKs reclaim recredit or congested flow */
+    if_pf ((!flow->credits) || (flow->flags & IPS_FLOW_FLAG_CONGESTED))
+      return PSM_OK;
+
+    while (!SLIST_EMPTY(scb_pend) && flow->credits) {
 	scb = SLIST_FIRST(scb_pend);
 	
 	if ((err = ips_spio_transfer_frame(proto->spioc, flow, &scb->ips_lrh, 
@@ -1165,17 +1194,21 @@ ips_proto_flow_flush_pio(struct ips_flow *flow, int *nflushed)
 			       scb->abs_timeout);
 	    num_sent++;
 	    flow->scb_num_pending--;
+	    flow->credits--;
 	    SLIST_REMOVE_HEAD(scb_pend, next);
 	    	    
 	}
-	else {
-	    proto->stats.pio_busy_cnt++;
-	    psmi_timer_request(proto->timerq, &flow->timer_send, 
-			       get_cycles() + proto->timeout_send);
+	else
 	  break;
-	}
     }
 
+    /* If out of flow credits re-schedule send timer */
+    if (!SLIST_EMPTY(scb_pend)) {
+      proto->stats.pio_busy_cnt++;
+      psmi_timer_request(proto->timerq, &flow->timer_send, 
+			 get_cycles() + proto->timeout_send);
+    }
+    
     if (nflushed != NULL)
 	*nflushed = num_sent;
 
@@ -1229,6 +1262,13 @@ ips_proto_flow_flush_dma(struct ips_flow *flow, int *nflushed)
     int howmany = 0;
     int nsent = 0;
 
+    /* Out of credits - ACKs/NAKs reclaim recredit or congested flow */
+    if_pf ((!flow->credits) || (flow->flags & IPS_FLOW_FLAG_CONGESTED)) {
+      if (nflushed)
+	*nflushed = 0;
+      return PSM_EP_NO_RESOURCES;
+    }
+    
     if (SLIST_EMPTY(scb_pend))
 	goto success;
 
@@ -1240,13 +1280,13 @@ ips_proto_flow_flush_dma(struct ips_flow *flow, int *nflushed)
 	howmany++;
     psmi_assert_always(howmany == flow->scb_num_pending);
 #else
-    howmany = flow->scb_num_pending;
+    howmany = min(flow->scb_num_pending, flow->credits);
 #endif
-
+    
     howmany = min(howmany, proto->scb_max_sdma);
-
+    
     if (howmany == 0)
-	goto success;
+      goto success;
 
     PSM_DEBUG_CHECK_INFLIGHT_CNTR(proto); /* Pre-check */
 
@@ -1273,7 +1313,8 @@ ips_proto_flow_flush_dma(struct ips_flow *flow, int *nflushed)
 				     proto->iovec_cntr_last_completed + nsent);
 
 	flow->scb_num_pending -= nsent;
-
+	flow->credits = max((int) flow->credits - nsent, 0);
+	
 	SLIST_FOREACH(scb, scb_pend, next) {
 	    if (++i > nsent) 
 		break;
@@ -1291,28 +1332,57 @@ ips_proto_flow_flush_dma(struct ips_flow *flow, int *nflushed)
 
     if (SLIST_FIRST(scb_pend) != NULL) {
 	psmi_assert(flow->scb_num_pending > 0);
-	proto->stats.writev_busy_cnt++;
-	/* For Tidflow cancel the ack timer since the flow is still active.
-	 * Ack timer is re-instated when the last scb has been dispatched.
-	 * Doing it too early can result in excessive time outs since multiple
-	 * tidflows can be active concurrently. Do not cancel ACK timer for 
-	 * go back N protocols.
-	 */
-	if (flow->protocol == PSM_PROTOCOL_TIDFLOW)
-	  psmi_timer_cancel(proto->timerq, &flow->timer_ack);
-	
-	psmi_timer_request(proto->timerq, &flow->timer_send,
-			   get_cycles() + proto->timeout_send);
+
+	switch(flow->protocol) {
+	case PSM_PROTOCOL_TIDFLOW:
+	  /* For Tidflow we can cancel the ack timer if we have flow credits
+	   * available and schedule the send timer. If we are out of flow
+	   * credits then the ack timer is scheduled as we are waiting for 
+	   * an ACK to reclaim credits. This is required since multiple
+	   * tidflows may be active concurrently.
+	   */
+	  if (flow->credits) {  
+	    /* Cancel ack timer and reschedule send timer. Increment 
+	     * writev_busy_cnt as this really is DMA buffer exhaustion.
+	     */
+	    psmi_timer_cancel(proto->timerq, &flow->timer_ack);
+	    psmi_timer_request(proto->timerq, &flow->timer_send,
+			       get_cycles() + (proto->timeout_send << 1));
+	    proto->stats.writev_busy_cnt++;
+	  }
+	  else {
+	    /* Re-instate ACK timer to reap flow credits */
+	    psmi_timer_request(proto->timerq, &flow->timer_ack,
+			       get_cycles() + (flow->path->epr_timeout_ack>>2));
+	  }
+	  
+	  break;
+	case PSM_PROTOCOL_GO_BACK_N:
+	default:
+	  if (flow->credits) {
+	    /* Schedule send timer and increment writev_busy_cnt */
+	    psmi_timer_request(proto->timerq, &flow->timer_send,
+			       get_cycles() + (proto->timeout_send << 1));
+	    proto->stats.writev_busy_cnt++;
+	  }
+	  else {
+	    /* Schedule ACK timer to reap flow credits */
+	    psmi_timer_request(proto->timerq, &flow->timer_ack,
+			       get_cycles() + (flow->path->epr_timeout_ack>>2));
+	  }
+	  break;
+	}
     }
     else {
-	psmi_timer_cancel(proto->timerq, &flow->timer_send);
-	psmi_timer_request(proto->timerq, &flow->timer_ack,
-			   get_cycles() + flow->path->epr_timeout_ack);
+      /* Schedule ack timer */
+      psmi_timer_cancel(proto->timerq, &flow->timer_send);
+      psmi_timer_request(proto->timerq, &flow->timer_ack,
+			 get_cycles() + flow->path->epr_timeout_ack);
     }
-
+    
     /* We overwrite error with its new meaning for flushing packets */
     if (nsent > 0)
-	if (nsent < howmany)
+        if (nsent < howmany)
 	    err = PSM_OK_NO_PROGRESS; /* partial flush */
 	else
 	    err = PSM_OK; /* complete flush */
@@ -1736,7 +1806,7 @@ ips_proto_timer_ack_callback(struct psmi_timer *current_timer, uint64_t current)
 	return PSM_OK;
 
     scb = STAILQ_FIRST(&flow->scb_unacked);
-
+        
     if (current >= scb->abs_timeout) {
 	int done_local;
 
@@ -1764,12 +1834,13 @@ ips_proto_timer_ack_callback(struct psmi_timer *current_timer, uint64_t current)
 	scb->ack_timeout = 
 	    min(scb->ack_timeout * flow->path->epr_timeout_ack_factor, 
 		flow->path->epr_timeout_ack_max);
-
+	scb->abs_timeout = t_cyc_next + scb->ack_timeout;
+	
 	if (done_local) {
 	    _IPATH_VDBG("sending err_chk flow=%d with first=%d,last=%d\n",
 		flow->flowid, STAILQ_FIRST(&flow->scb_unacked)->seq_num.psn,
 		STAILQ_LAST(&flow->scb_unacked, ips_scb, nextq)->seq_num.psn);
-	    
+	  
 	    if (flow->protocol == PSM_PROTOCOL_TIDFLOW)
 	      ips_proto_send_ctrl_message(flow, 
 					  OPCODE_ERR_CHK_GEN,
@@ -1782,7 +1853,7 @@ ips_proto_timer_ack_callback(struct psmi_timer *current_timer, uint64_t current)
 					  NULL);
 	}
 
-	t_cyc_next += scb->ack_timeout;
+	t_cyc_next = get_cycles() + scb->ack_timeout;
     }
     else 
 	t_cyc_next += (scb->abs_timeout - current);
@@ -1796,6 +1867,18 @@ psm_error_t
 ips_proto_timer_send_callback(struct psmi_timer *current_timer, uint64_t current)
 {
     struct ips_flow *flow = (struct ips_flow *) current_timer->context;
+    
+    /* If flow is marked as congested adjust injection rate - see process nak
+     * when a congestion NAK is received.
+     */
+    if_pf (flow->flags & IPS_FLOW_FLAG_CONGESTED) {
+      struct ips_proto *proto = flow->ipsaddr->proto;
+
+      /* Clear congestion flag and decrease injection rate */
+      flow->flags &= ~IPS_FLOW_FLAG_CONGESTED;
+      if ((flow->path->epr_ccti + proto->ccti_increase) < proto->ccti_limit)
+	ips_cca_adjust_rate(flow->path, proto->ccti_increase);
+    }
 
     flow->fn.xfer.flush(flow, NULL);    
     return PSM_OK;
@@ -1806,7 +1889,7 @@ ips_cca_adjust_rate(ips_path_rec_t *path_rec, int cct_increment)
 {
   struct ips_proto *proto = path_rec->proto;
   uint16_t prev_ipd, prev_divisor;
-  
+
   /* Increment/decrement ccti for path */
   psmi_assert_always(path_rec->epr_ccti >= path_rec->epr_ccti_min);
   path_rec->epr_ccti += cct_increment;
@@ -1828,7 +1911,7 @@ ips_cca_adjust_rate(ips_path_rec_t *path_rec, int cct_increment)
   
   _IPATH_CCADBG("CCA: %s injection rate to <%x.%x> from <%x.%x>\n", (cct_increment > 0) ? "Decreasing" : "Increasing", path_rec->epr_cca_divisor, path_rec->epr_active_ipd, prev_divisor, prev_ipd);
   
-  /* Reschedule CCA timer if this path is still markes as congested */
+  /* Reschedule CCA timer if this path is still marked as congested */
   if (path_rec->epr_ccti > path_rec->epr_ccti_min) {
     psmi_timer_request(proto->timerq,
 		       &path_rec->epr_timer_cca,
@@ -1845,7 +1928,8 @@ ips_cca_timer_callback(struct psmi_timer *current_timer, uint64_t current)
   ips_path_rec_t *path_rec = (ips_path_rec_t *) current_timer->context;
   
   /* Increase injection rate for flow. Decrement CCTI */
-  psmi_assert_always(path_rec->epr_ccti > path_rec->epr_ccti_min);
-  
-  return ips_cca_adjust_rate(path_rec, -1);
+  if (path_rec->epr_ccti > path_rec->epr_ccti_min)
+    return ips_cca_adjust_rate(path_rec, -1);
+  else
+    return PSM_OK;
 }

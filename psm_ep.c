@@ -300,17 +300,23 @@ __psm_ep_open_opts_get_defaults(struct psm_ep_open_opts *opts)
 {
     union psmi_envvar_val nSendBuf;
     union psmi_envvar_val netPKey;
+#if (PSM_VERNO >= 0x010d)
     union psmi_envvar_val env_path_service_id;
     union psmi_envvar_val env_path_res_type;
+#endif
+#if (PSM_VERNO >= 0x010e)
+    union psmi_envvar_val nSendDesc;
+    union psmi_envvar_val immSize;
+#endif
 
     PSMI_ERR_UNLESS_INITIALIZED(NULL);
     
     /* Get number of default send buffers from environment */
     psmi_getenv("PSM_NUM_SEND_BUFFERS",
-		"Number of send buffers to allocate [512]",
+		"Number of send buffers to allocate [1024]",
 		PSMI_ENVVAR_LEVEL_USER,
 		PSMI_ENVVAR_TYPE_UINT,
-		(union psmi_envvar_val) 512,
+		(union psmi_envvar_val) 1024,
 		&nSendBuf);
     
     /* Get network key from environment. MVAPICH and other vendor MPIs do not
@@ -322,7 +328,8 @@ __psm_ep_open_opts_get_defaults(struct psm_ep_open_opts *opts)
 		PSMI_ENVVAR_TYPE_ULONG,
 		(union psmi_envvar_val) IPATH_DEFAULT_P_KEY,
 		&netPKey);
-    
+
+#if (PSM_VERNO >= 0x010d)    
     /* Get Service ID from environment */
     psmi_getenv("PSM_IB_SERVICE_ID",
 		"IB Service ID for path resolution",
@@ -342,6 +349,29 @@ __psm_ep_open_opts_get_defaults(struct psm_ep_open_opts *opts)
                 "Mechanism to query IB path record (default is no path query)",
                 PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_STR,
                 (union psmi_envvar_val) "none", &env_path_res_type);
+#endif
+
+#if (PSM_VERNO >= 0x010e)
+    /* Get numner of send descriptors - by default this is 4 times the number
+     * of send buffers - mainly used for short/inlined messages.
+     */
+    psmi_getenv("PSM_NUM_SEND_DESCRIPTORS",
+		"Number of send descriptors to allocate [4096]",
+		PSMI_ENVVAR_LEVEL_USER,
+		PSMI_ENVVAR_TYPE_UINT,
+		(union psmi_envvar_val) (nSendBuf.e_uint << 2),
+		&nSendDesc);
+
+    /* Get immediate data size - transfers less than immediate data size do
+     * not consume a send buffer and require just a send descriptor.
+     */
+    psmi_getenv("PSM_SEND_IMMEDIATE_SIZE",
+		"Immediate data send size not requiring a buffer [128]",
+		PSMI_ENVVAR_LEVEL_USER,
+		PSMI_ENVVAR_TYPE_UINT,
+		(union psmi_envvar_val) 128,
+		&immSize);
+#endif
     
     opts->timeout = 30000000000LL; /* 30 sec */
     opts->unit    = PSMI_UNIT_ID_ANY;
@@ -354,6 +384,7 @@ __psm_ep_open_opts_get_defaults(struct psm_ep_open_opts *opts)
     opts->shm_mbytes = 10;
     opts->sendbufs_num = nSendBuf.e_uint;
     opts->network_pkey = (uint64_t) netPKey.e_ulong;
+#if (PSM_VERNO >= 0x010d)
     opts->service_id = (uint64_t) env_path_service_id.e_ulonglong;
     
     if (!strcasecmp(env_path_res_type.e_str, "none"))
@@ -366,6 +397,12 @@ __psm_ep_open_opts_get_defaults(struct psm_ep_open_opts *opts)
       _IPATH_ERROR("Unknown path resolution type %s. Disabling use of path record query.\n", env_path_res_type.e_str);
       opts->path_res_type = PSM_PATH_RES_NONE;
     }
+#endif
+#if (PSM_VERNO >= 0x010e)
+    opts->senddesc_num = nSendDesc.e_uint;
+    opts->imm_size     = immSize.e_uint;
+#endif
+
     return PSM_OK;
 }
 PSMI_API_DECL(psm_ep_open_opts_get_defaults)
@@ -433,13 +470,26 @@ __psm_ep_open(psm_uuid_t const unique_job_key, struct psm_ep_open_opts const *op
 	    opts.outvl = opts_i->outvl;
 #endif
 	}
+#if (PSM_VERNO >= 0x010d)
 	/* Note: Environment variable specification for service ID and 
 	 * path resolition type takes precedence over ep_open defaults.
 	 */
-	if (opts_i->service_id)
-	  opts.service_id = (uint64_t) opts_i->service_id;
-	if (opts.path_res_type == PSM_PATH_RES_NONE)
-	  opts.path_res_type = opts_i->path_res_type;
+	if (psmi_verno_client() >= 0x010d) {
+	  if (opts_i->service_id)
+	    opts.service_id = (uint64_t) opts_i->service_id;
+	  if (opts.path_res_type == PSM_PATH_RES_NONE)
+	    opts.path_res_type = opts_i->path_res_type;
+	}
+#endif
+
+#if (PSM_VERNO >= 0x010e)
+	if (psmi_verno_client() >= 0x010e) {
+	  if (opts_i->senddesc_num)
+	    opts.senddesc_num = opts_i->senddesc_num;
+	  if (opts_i->imm_size) 
+	    opts.imm_size = opts_i->imm_size;
+	}
+#endif
     }
 
     if ((err = psm_ep_num_devunits(&num_units)) != PSM_OK) 
@@ -585,8 +635,22 @@ __psm_ep_open(psm_uuid_t const unique_job_key, struct psm_ep_open_opts const *op
     ep->memmode = psmi_parse_memmode();
     ep->ipath_num_sendbufs = opts.sendbufs_num;
     ep->network_pkey = (uint16_t) opts.network_pkey & PSMI_EP_OPEN_PKEY_MASK;
+#if (PSM_VERNO >= 0x010d)
     ep->service_id = opts.service_id;
     ep->path_res_type = opts.path_res_type;
+#else
+    /* Select sane defaults with older PSM header */
+    ep->service_id = 0x1000117500000000ULL; /* Default service ID */
+    ep->path_res_type = 0;  /* No path resolution */
+#endif
+#if (PSM_VERNO >= 0x010e)
+    ep->ipath_num_descriptors = opts.senddesc_num;
+    ep->ipath_imm_size = opts.imm_size;
+#else
+    /* Default is 4 times more descriptors than buffers */
+    ep->ipath_num_descriptors = ep->ipath_num_sendbufs << 2;
+    ep->ipath_imm_size = 128;
+#endif
     ep->errh = psmi_errhandler_global; /* by default use the global one */
     ep->ptl_amsh.ep_poll = psmi_poll_noop;
     ep->ptl_ips.ep_poll  = psmi_poll_noop;

@@ -621,8 +621,8 @@ stats_register_mem_stats(psm_ep_t ep)
 	_SDECL("PSM desctors (max)", m_descriptors_max),
 	_SDECL("Unexp. buffers (current)", m_unexpbufs_total),
 	_SDECL("Unexp. Buffers (max)", m_unexpbufs_max),
-	_SDECL("Other (current)", m_unexpbufs_total),
-	_SDECL("Other (max)", m_unexpbufs_max),
+	_SDECL("Other (current)", m_undefined_total),
+	_SDECL("Other (max)", m_undefined_max),
     };
 
     psmi_stats_register_type("PSM memory allocation statistics", 

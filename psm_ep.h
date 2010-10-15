@@ -100,6 +100,8 @@ struct psm_ep {
     int			memmode;    /**> min, normal, large memory mode */
 
     uint32_t	ipath_num_sendbufs; /**> Number of allocated send buffers */
+    uint32_t    ipath_num_descriptors; /** Number of allocated scb descriptors*/
+    uint32_t    ipath_imm_size;     /** Immediate data size */
     uint32_t	shm_mbytes;	    /**> Number of shared memory pages */
 
     psmi_context_t	context;

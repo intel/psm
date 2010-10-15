@@ -446,7 +446,7 @@ ips_proto_process_ack(struct ips_recvhdrq_event *rcv_ev)
     struct ips_scb_pendlist *scb_pend;
     psm_protocol_type_t protocol;
     ptl_epaddr_flow_t flowid;
-
+    
     ips_ptladdr_lock(ipsaddr);
     
     IPS_FLOWID_UNPACK(p_hdr->flowid, protocol, flowid);
@@ -472,14 +472,6 @@ ips_proto_process_ack(struct ips_recvhdrq_event *rcv_ev)
     if (!flow) /* Invalid ack for flow */
       goto ret;
     
-    /* CCA: If flow is congested adjust rate */
-    if_pf (rcv_ev->is_congested & IPS_RECV_EVENT_BECN)
-      if ((flow->path->epr_ccti + proto->ccti_increase) < proto->ccti_limit) {
-	ips_cca_adjust_rate(flow->path, proto->ccti_increase);
-	/* Clear congestion event */
-	rcv_ev->is_congested &= ~IPS_RECV_EVENT_BECN;
-      }
-
     unackedq = &flow->scb_unacked;
     scb_pend = &flow->scb_pend;
     
@@ -491,7 +483,8 @@ ips_proto_process_ack(struct ips_recvhdrq_event *rcv_ev)
 	scb = STAILQ_FIRST(unackedq);
 	STAILQ_REMOVE_HEAD(unackedq, nextq);
 	flow->scb_num_unacked--;
-
+	flow->credits++;
+	
 	if (scb == SLIST_FIRST(scb_pend)) {
 	    flow->scb_num_pending--;
 	    SLIST_REMOVE_HEAD(scb_pend, next);
@@ -510,19 +503,45 @@ ips_proto_process_ack(struct ips_recvhdrq_event *rcv_ev)
          * acked */
 	if (STAILQ_EMPTY(unackedq)) {
             psmi_timer_cancel(proto->timerq, &flow->timer_ack);
+	    psmi_timer_cancel(proto->timerq, &flow->timer_send);
 	    SLIST_FIRST(scb_pend) = NULL;
 	    psmi_assert(flow->scb_num_pending == 0);
+	    /* Reset congestion window - all packets ACK'd */
+	    flow->credits = flow->cwin = proto->flow_credits;
+	    flow->ack_interval = max((flow->credits >> 2) - 1, 1);
+	    flow->flags &= ~IPS_FLOW_FLAG_CONGESTED;
 	    goto ret;
         }
     }
-
+    
+    /* CCA: If flow is congested adjust rate */
+    if_pf (rcv_ev->is_congested & IPS_RECV_EVENT_BECN) {
+      if ((flow->path->epr_ccti + proto->ccti_increase) < proto->ccti_limit) {
+	ips_cca_adjust_rate(flow->path, proto->ccti_increase);
+	/* Clear congestion event */
+	rcv_ev->is_congested &= ~IPS_RECV_EVENT_BECN;
+      }
+    }
+    else {
+      /* Increase congestion window if flow is not congested */
+      if_pf (flow->cwin < proto->flow_credits) {
+	flow->credits += 
+	  min(flow->cwin << 1, proto->flow_credits) - flow->cwin;
+	flow->cwin = min(flow->cwin << 1, proto->flow_credits);
+	flow->ack_interval = max((flow->credits >> 2) - 1, 1);
+      }
+    }
+    
+    /* Reclaimed some credits - attempt to flush flow */
+    flow->fn.xfer.flush(flow, NULL);
+    
     /*
      * If the next packet has not even been put on the wire, cancel the
      * retransmission timer since we're still presumably waiting on free 
      * pio bufs
      */
     if (STAILQ_FIRST(unackedq)->abs_timeout == TIMEOUT_INFINITE)
-        psmi_timer_cancel(proto->timerq, &flow->timer_ack);
+       psmi_timer_cancel(proto->timerq, &flow->timer_ack);
 
 ret:
     ips_ptladdr_unlock(ipsaddr);
@@ -539,13 +558,13 @@ _process_nak(struct ips_recvhdrq_event *rcv_ev)
     psmi_seqnum_t ack_seq_num;
     ips_scb_t *scb;
     struct ips_proto *proto = ipsaddr->proto;
-    int num_resent = 0;
     struct ips_flow *flow = NULL;
     struct ips_scb_unackedq *unackedq;
     struct ips_scb_pendlist *scb_pend;
     psm_protocol_type_t protocol;
     ptl_epaddr_flow_t flowid;
-
+    int num_resent = 0;
+    
     ips_ptladdr_lock(ipsaddr);
     
     IPS_FLOWID_UNPACK(p_hdr->flowid, protocol, flowid);
@@ -557,7 +576,8 @@ _process_nak(struct ips_recvhdrq_event *rcv_ev)
     switch(protocol){
     case PSM_PROTOCOL_GO_BACK_N:
       flow = &ipsaddr->flows[flowid];
-      if (!pio_dma_ack_valid(flow, ack_seq_num, proto->scb_max_inflight))
+            
+      if (!pio_dma_ack_valid(flow, ack_seq_num, proto->scb_max_inflight)) 
 	goto ret;
       flow->xmit_ack_num.psn = ack_seq_num.psn - 1;
       break;
@@ -567,7 +587,7 @@ _process_nak(struct ips_recvhdrq_event *rcv_ev)
 	
 	new_flowgenseq.val = p_hdr->data[1].u32w0;
 	flow = get_tidflow(ipsaddr, p_hdr, ack_seq_num, proto->scb_max_inflight);
-	if (flow) /* Update xmit seq num to the new flowgenseq */
+	if (flow)   /* Update xmit seq num to the new flowgenseq */
 	  flow->xmit_seq_num = new_flowgenseq;
       }
       break;
@@ -577,15 +597,7 @@ _process_nak(struct ips_recvhdrq_event *rcv_ev)
     
     if (!flow) /* Invalid ack for flow */
       goto ret;
-    
-    /* CCA: If flow is congested adjust rate */
-    if_pf (rcv_ev->is_congested & IPS_RECV_EVENT_BECN)
-      if ((flow->path->epr_ccti + proto->ccti_increase) < proto->ccti_limit) {
-	ips_cca_adjust_rate(flow->path, proto->ccti_increase);
-	/* Clear congestion event */
-	rcv_ev->is_congested &= ~IPS_RECV_EVENT_BECN;
-      }
-    
+
     unackedq = &flow->scb_unacked;
     scb_pend = &flow->scb_pend;
         
@@ -602,7 +614,7 @@ _process_nak(struct ips_recvhdrq_event *rcv_ev)
 	scb = STAILQ_FIRST(unackedq);
 	STAILQ_REMOVE_HEAD(unackedq, nextq);
 	flow->scb_num_unacked--;
-
+	
 	if (scb->flags & IPS_SEND_FLAG_WAIT_SDMA) 
 	    ips_proto_dma_wait_until(proto, scb->dma_ctr);
 
@@ -615,8 +627,13 @@ _process_nak(struct ips_recvhdrq_event *rcv_ev)
         /* set all index pointer to NULL if all frames has been acked */
 	if (STAILQ_EMPTY(unackedq)) {
             psmi_timer_cancel(proto->timerq, &flow->timer_ack);
+	    psmi_timer_cancel(proto->timerq, &flow->timer_send);
 	    SLIST_FIRST(scb_pend) = NULL;
 	    psmi_assert(flow->scb_num_pending == 0);
+	    /* Reset congestion window if all packets acknowledged */
+	    flow->credits = flow->cwin = proto->flow_credits;
+	    flow->ack_interval = max((flow->credits >> 2) - 1, 1);
+	    flow->flags &= ~IPS_FLOW_FLAG_CONGESTED;
 	    goto ret;
         }
     }
@@ -626,30 +643,70 @@ _process_nak(struct ips_recvhdrq_event *rcv_ev)
     if (flow->fn.protocol.nak_post_process)
       flow->fn.protocol.nak_post_process(flow, p_hdr);
     
-    if (STAILQ_FIRST(unackedq)->abs_timeout == TIMEOUT_INFINITE)
-        psmi_timer_cancel(proto->timerq, &flow->timer_ack);
-
+    /* Always cancel ACK timer as we are going to restart the flow */
+    psmi_timer_cancel(proto->timerq, &flow->timer_ack);
+    
     /* What's now pending is all that was unacked */
     SLIST_FIRST(scb_pend) = STAILQ_FIRST(unackedq);
     flow->scb_num_pending = flow->scb_num_unacked;
+    
+    /* If NAK with congestion bit set - delay re-transmitting and THEN adjust
+     * CCA rate.
+     */
+    if_pf (rcv_ev->is_congested & IPS_RECV_EVENT_BECN) {
+      uint64_t offset;
+      
+      /* Clear congestion event and mark flow as congested */
+      rcv_ev->is_congested &= ~IPS_RECV_EVENT_BECN;
+      flow->flags |= IPS_FLOW_FLAG_CONGESTED;
+      
+      /* For congested flow use slow start i.e. reduce congestion window.
+       * For TIDFLOW we cannot reduce congestion window as peer expects
+       * header packets at regular intervals (protoexp->hdr_pkt_interval).
+       */
+      if (flow->protocol != PSM_PROTOCOL_TIDFLOW)
+	flow->credits = flow->cwin = 1;
+      else 
+	flow->credits = flow->cwin;
 
-    /* Flush pending scb's */
-    flow->fn.xfer.flush(flow, &num_resent);
-
-    ipsaddr->stats.send_rexmit += num_resent;
-
+      flow->ack_interval = max((flow->credits >> 2) - 1, 1);
+      
+      /* During congestion cancel send timer and delay retransmission by 
+       * random interval 
+       */
+      psmi_timer_cancel(proto->timerq, &flow->timer_send);
+      if (SLIST_FIRST(scb_pend)->ack_timeout != TIMEOUT_INFINITE)
+	offset = (SLIST_FIRST(scb_pend)->ack_timeout >> 1);	    
+      else
+	offset = 0;
+      psmi_timer_request(proto->timerq, &flow->timer_send,
+			 (get_cycles() +
+			  (uint64_t)(offset * (rand()/RAND_MAX + 1.0))));
+    }
+    else {
+      /* Reclaim all credits upto congestion window only */
+      flow->credits = flow->cwin;
+      flow->ack_interval = max((flow->credits >> 2) - 1, 1);
+      
+      /* Flush pending scb's */
+      flow->fn.xfer.flush(flow, &num_resent);
+      ipsaddr->stats.send_rexmit += num_resent;
+    }
+    
 ret:
     ips_ptladdr_unlock(ipsaddr);
     return;
 }
 
 static void 
-_process_err_chk(ips_epaddr_t *ipsaddr, struct ips_message_header *p_hdr)
+_process_err_chk(struct ips_recvhdrq *recvq, ips_epaddr_t *ipsaddr, 
+		 struct ips_message_header *p_hdr)
 {
     uint32_t seq_num;
     int16_t seq_off;
     ptl_epaddr_flow_t flowid = ips_proto_flowid(p_hdr);
-
+    struct ips_flow *flow = &ipsaddr->flows[flowid];
+    
     INC_TIME_SPEND(TIME_SPEND_USER4);
 
     ipsaddr->stats.err_chk_recv++;
@@ -658,13 +715,19 @@ _process_err_chk(ips_epaddr_t *ipsaddr, struct ips_message_header *p_hdr)
     seq_off = (int16_t)(ipsaddr->flows[flowid].recv_seq_num.val - seq_num);
 
     if_pf (seq_off <= 0) {
-	_IPATH_VDBG("naking for seq=%d, off=%d on flowid  %d\n",
-	    seq_num, seq_off, flowid);
-    }
+      _IPATH_VDBG("naking for seq=%d, off=%d on flowid  %d\n",
+		  seq_num, seq_off, flowid);
+      
+      if (seq_off < -flow->ack_interval) 
+	flow->flags |= IPS_FLOW_FLAG_GEN_BECN;
 
-    ips_proto_send_ctrl_message(&ipsaddr->flows[flowid], 
-				seq_off <= 0 ? OPCODE_NAK : OPCODE_ACK,
-				&ipsaddr->ctrl_msg_queued, NULL);
+      ips_proto_send_nak(recvq, flow);
+      flow->flags |= IPS_FLOW_FLAG_NAK_SEND;
+    }
+    else {
+      ips_proto_send_ctrl_message(flow, OPCODE_ACK, 
+				  &ipsaddr->ctrl_msg_queued, NULL);
+    }
 }
 
 static void
@@ -1100,7 +1163,7 @@ static void rhf_errnum_string(char *msg, size_t msglen, long err)
  * Error handling
  */
 int __recvpath
-ips_proto_process_packet_error(const struct ips_recvhdrq_event *rcv_ev)
+ips_proto_process_packet_error(struct ips_recvhdrq_event *rcv_ev)
 {
     struct ips_proto *proto = rcv_ev->proto;
     int pkt_verbose_err = infinipath_debug & __IPATH_PKTDBG;
@@ -1120,7 +1183,68 @@ ips_proto_process_packet_error(const struct ips_recvhdrq_event *rcv_ev)
      * safe.  Tid errors on expected or other packets means trouble.
      */
     if (tiderr && rcv_ev->ptype == RCVHQ_RCV_TYPE_EAGER) {
+        struct ips_message_header *p_hdr = rcv_ev->p_hdr;
+      
+      
+	/* Payload dropped - Determine flow for this header and see if
+	 * we need to generate a NAK. 
+	 *
+	 * ALL PACKET DROPS IN THIS CATEGORY CAN BE FLAGGED AS DROPPED DUE TO
+	 * CONGESTION AS THE EAGER BUFFER IS FULL.
+	 *
+	 * Possible eager packet type:
+	 * 
+	 * Ctrl Message - ignore
+	 * MQ message - Can get flow and see if we need to NAK.
+	 * AM message - Can get flow and see if we need to NAK.
+	 */
+
 	proto->stats.hdr_overflow++;
+	if (data_err)
+	  return 0;
+	
+	switch(p_hdr->sub_opcode) {
+	case OPCODE_SEQ_MQ_HDR:
+	case OPCODE_SEQ_MQ_CTRL:
+	case OPCODE_AM_REQUEST:
+	case OPCODE_AM_REQUEST_NOREPLY:
+	case OPCODE_AM_REPLY:
+	  {
+	    uint32_t sequence_num = 
+	      __be32_to_cpu(p_hdr->bth[2]) & LOWER_24_BITS;
+	    ptl_epaddr_flow_t flowid = ips_proto_flowid(p_hdr);
+	    struct ips_epstate_entry *epstaddr;
+	    struct ips_flow *flow;
+	    int16_t diff;
+	    
+	    /* Obtain ipsaddr for packet */
+	    epstaddr = ips_epstate_lookup(rcv_ev->recvq->epstate, 
+					  rcv_ev->p_hdr->commidx);	    
+	    if_pf (epstaddr == NULL || epstaddr->epid != rcv_ev->epid)
+	      return 0; /* Unknown packet - drop */
+	    
+	    rcv_ev->ipsaddr = epstaddr->ipsaddr;	    
+	    flow = &rcv_ev->ipsaddr->flows[flowid];
+	    diff = (int16_t) (sequence_num - flow->recv_seq_num.psn);
+	    
+	    if (diff >= 0 && !(flow->flags & IPS_FLOW_FLAG_NAK_SEND)) {	      
+	      /* Mark flow as congested and attempt to generate NAK */
+	      flow->flags |= IPS_FLOW_FLAG_GEN_BECN;
+	      rcv_ev->ipsaddr->stats.congestion_pkts++;
+	      flow->last_seq_num.val = sequence_num;
+	      
+	      flow->flags |= IPS_FLOW_FLAG_NAK_SEND;
+	      flow->cca_ooo_pkts = 0;
+	      ips_proto_send_nak((struct ips_recvhdrq *) rcv_ev->recvq, flow);
+	    }
+	    
+	    /* Safe to process ACKs from header */
+	    ips_proto_process_ack(rcv_ev);
+	  }
+	  break;
+	default:
+	  break;
+	}
     }
     else if (tiderr)  /* tid error, but not on an eager pkt */
     {
@@ -1276,10 +1400,30 @@ ips_proto_process_packet_inner(struct ips_recvhdrq_event *rcv_ev)
 		ret = ips_proto_am(rcv_ev);
 		ips_proto_process_ack(rcv_ev);
 		break;
+	    case OPCODE_FLOW_CCA_BECN:
+	      {
+		struct ips_proto *proto = ipsaddr->proto;
+		struct ips_flow *flow = NULL;
+		psm_protocol_type_t protocol;
+		ptl_epaddr_flow_t flowid;
 
+		IPS_FLOWID_UNPACK(p_hdr->flowid, protocol, flowid);
+		psmi_assert_always(protocol == PSM_PROTOCOL_GO_BACK_N);
+		flow = &ipsaddr->flows[flowid];
+		
+	        if ((flow->path->epr_ccti + proto->ccti_increase) < 
+		    proto->ccti_limit) {
+		  ips_cca_adjust_rate(flow->path, proto->ccti_increase);
+		  /* Clear congestion event */
+		  rcv_ev->is_congested &= ~IPS_RECV_EVENT_BECN;
+		}
+	      }
+	      break;
+		
             case OPCODE_ERR_CHK:
             case OPCODE_ERR_CHK_OLD:
-                _process_err_chk(ipsaddr, p_hdr);
+	      _process_err_chk((struct ips_recvhdrq *) rcv_ev->recvq, 
+			       ipsaddr, p_hdr);
 		/* Ignore FECN bit since this is the control path */
 		rcv_ev->is_congested &= ~IPS_RECV_EVENT_FECN;
                 break;

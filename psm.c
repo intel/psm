@@ -83,6 +83,11 @@ psmi_verno_isinteroperable(uint16_t verno)
     int iscompat = -1;
 
     switch (psmi_verno) {
+       case 0x010e:
+	 /* Allow specification of send buffer descriptors in addition to send
+	  * network buffers for IPS. Having a large number of send descriptors
+	  * can be beneficial on large scale clusters with bursty network IO.
+	  */
        case 0x010d:
 	 /* Wire protocol is same as QOFED 1.4.2. Added support to specify
 	  * path record resolution mechanism as well as service ID to use

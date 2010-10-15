@@ -100,6 +100,7 @@ ips_protoexp_init(const psmi_context_t *context,
 		  const struct ips_proto *proto, 
 		  uint32_t protoexp_flags,
 		  int num_of_send_bufs,
+		  int num_of_send_desc,
 		  struct ips_protoexp **protoexp_o)
 {
     struct ips_protoexp	*protoexp = NULL;
@@ -190,7 +191,7 @@ ips_protoexp_init(const psmi_context_t *context,
 
 	if ((protoexp->tid_xfer_type == PSM_TRANSFER_DMA) ||
 	    (protoexp->proto->flags & IPS_PROTO_FLAG_CKSUM)) {
-	    num_bounce_bufs = num_of_send_bufs,
+	    num_bounce_bufs = max(8, num_of_send_bufs >> 2);
 	    bounce_size = protoexp->tid_send_fragsize;
 	}
 	else {
@@ -199,8 +200,8 @@ ips_protoexp_init(const psmi_context_t *context,
 	  num_bounce_bufs = 0;
 	  bounce_size = 0;
 	}
-	if ((err = ips_scbctrl_init(context, num_of_send_bufs, num_bounce_bufs,
-		bounce_size, ips_tid_scbavail_callback,
+	if ((err = ips_scbctrl_init(context, num_of_send_desc, num_bounce_bufs,
+		0, bounce_size, ips_tid_scbavail_callback,
 		protoexp, &protoexp->tid_scbc_rv)))
 	    goto fail;
     }
@@ -227,6 +228,17 @@ ips_protoexp_init(const psmi_context_t *context,
 		  (union psmi_envvar_val) defval, &env_exp_hdr);
       
       protoexp->hdr_pkt_interval = env_exp_hdr.e_uint;
+      /* Account for flow credits - Should try to have atleast 4 headers
+       * generated per window.
+       */
+      protoexp->hdr_pkt_interval = 
+	max(min(protoexp->hdr_pkt_interval, proto->flow_credits >> 2), 1);
+      
+      if (protoexp->hdr_pkt_interval != env_exp_hdr.e_uint) {
+	_IPATH_VDBG("Overriding PSM_EXPECTED_HEADERS=%u to be '%u'\n",
+		    env_exp_hdr.e_uint, protoexp->hdr_pkt_interval);
+      }
+      
     }
     
     /* Send descriptors.
@@ -1216,7 +1228,6 @@ ips_tid_send_handle_tidreq(struct ips_protoexp *protoexp,
     }
 
     tidsendc->frame_send = 0;
-    tidsendc->ack_frame_num = 0;
     tidsendc->remaining_bytes = tid_list->tsess_length;
     tidsendc->remaining_bytes_in_page = 
 			   tid_list->tsess_list[0].length;
@@ -1364,7 +1375,7 @@ ips_scb_prepare_tid_sendctrl(struct ips_flow *flow,
     ips_scb_t *scb;
     uint32_t scb_flags = IPS_SEND_FLAG_HDR_SUPPRESS;
 
-    if ((scb = ips_scbctrl_alloc(&protoexp->tid_scbc_rv, 1, 0)) == NULL)
+    if ((scb = ips_scbctrl_alloc(&protoexp->tid_scbc_rv, 1, 0, 0)) == NULL)
 	return NULL;
 
     /*
@@ -1400,7 +1411,7 @@ ips_scb_prepare_tid_sendctrl(struct ips_flow *flow,
       bufptr = tidsendc->buffer;
       
       /* Try to obtain another scb after sending unaligned data */
-      if ((scb = ips_scbctrl_alloc(&protoexp->tid_scbc_rv, 1, 0)) == NULL)
+      if ((scb = ips_scbctrl_alloc(&protoexp->tid_scbc_rv, 1, 0, 0)) == NULL)
 	return NULL;
     }
     
@@ -1436,7 +1447,6 @@ ips_scb_prepare_tid_sendctrl(struct ips_flow *flow,
 	scb->cb_param = tidsendc;
 	
 	tidsendc->is_complete = 1;
-	tidsendc->ack_frame_num = tidsendc->frame_send;
     }
     else {
 	scb->callback = NULL;
@@ -1447,12 +1457,7 @@ ips_scb_prepare_tid_sendctrl(struct ips_flow *flow,
     /* Do not suppress header every hdr_pkt_interval or the last packet */
     if ((++tidsendc->frame_send % protoexp->hdr_pkt_interval) == 0) {
       scb_flags &= ~IPS_SEND_FLAG_HDR_SUPPRESS;
-      
-      /* Request an ACK atleast every IPS_SDMA_MAX_SCB packets */
-      if ((tidsendc->frame_send - tidsendc->ack_frame_num) >= IPS_SDMA_MAX_SCB){
-	scb_flags |= IPS_SEND_FLAG_ACK_REQ;
-	tidsendc->ack_frame_num = tidsendc->frame_send;
-      }
+      scb_flags |= IPS_SEND_FLAG_ACK_REQ; /* Request an ACK */
     }
     
     scb->flags           = scb_flags;

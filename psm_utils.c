@@ -1034,6 +1034,7 @@ psmi_log_memstats(psmi_memtype_t type, int64_t nbytes)
 	    _add_max_total(stats, nbytes);
 	    break;
 	case UNDEFINED:
+	    _add_max_total(undefined, nbytes);
 	    break;
 	default:
 	    psmi_assert_always(type == TOTAL);

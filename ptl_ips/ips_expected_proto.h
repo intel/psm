@@ -146,11 +146,11 @@ struct ips_tid_send_desc {
     uint32_t	remaining_bytes;   
     uint32_t	remaining_bytes_in_page;				    
     uint32_t	frame_send;
-    uint32_t    ack_frame_num;
     uint32_t	offset;
     uint32_t	iovec_cntr_last;
     uint32_t	release_cnt;
     uint32_t    unaligned_sent;
+    uint32_t    pad;
 				    
     psmi_timer   timer_tidrelease;
 

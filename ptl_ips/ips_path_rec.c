@@ -519,9 +519,9 @@ psm_error_t ips_ibta_init(struct ips_proto *proto)
 		&ccti_incr);
     
     psmi_getenv("PSM_CCTI_TIMER",
-		"IBTA_CCA: CCT table congestion timer (default 5 us)",
+		"IBTA_CCA: CCT table congestion timer (default 16 us)",
 		PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_UINT_FLAGS,
-		(union psmi_envvar_val) 5,
+		(union psmi_envvar_val) 16,
 		&ccti_timer);
     
     psmi_getenv("PSM_CCTI_TABLE_SIZE",
@@ -536,6 +536,9 @@ psm_error_t ips_ibta_init(struct ips_proto *proto)
     proto->ccti_size = ccti_size.e_uint;
   }
   
+  /* Seed the random number generator with our pid */
+  srand(getpid());
+
   /* Initialize path record hash table */
   bzero((void*) &ips_path_rec_hash, sizeof(struct hsearch_data));
   hcreate_r(DF_PATH_REC_HASH_SIZE, &ips_path_rec_hash);

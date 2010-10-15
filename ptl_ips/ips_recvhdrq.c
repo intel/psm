@@ -123,7 +123,7 @@ ips_recvhdrq_init(const psmi_context_t *context,
 
     recvq->recvq_callbacks = *callbacks; /* deep copy */
     SLIST_INIT(&recvq->pending_acks); 
-    
+
     recvq->state->hdrq_head = 0;
     recvq->state->rcv_egr_index_head = NO_EAGER_UPDATE;
     recvq->state->num_hdrq_done = 0;
@@ -289,7 +289,6 @@ _check_headers(struct ips_recvhdrq_event *rcv_ev)
 
   /* Verify that the packet was destined for our context */
   dest_context = ips_proto_dest_context_from_header(proto, rcv_ev->p_hdr);
-  
   if_pf (dest_context != recvq->proto->epinfo.ep_context) {
     
     struct ips_recvhdrq_state *state = recvq->state;
@@ -389,18 +388,30 @@ PSMI_ALWAYS_INLINE(
 void
 process_pending_acks(struct ips_recvhdrq *recvq))
 {
+  psm_error_t err;
+  
   /* If any pending acks, dispatch them now */
   while (!SLIST_EMPTY(&recvq->pending_acks)) {
     struct ips_flow *flow = SLIST_FIRST(&recvq->pending_acks);
     
     SLIST_REMOVE_HEAD(&recvq->pending_acks, next);
     SLIST_NEXT(flow, next) = NULL;
-    flow->flags &= ~IPS_FLOW_FLAG_PENDING_ACK;
+
+    if (flow->flags & IPS_FLOW_FLAG_PENDING_ACK) {
+      psmi_assert_always((flow->flags & IPS_FLOW_FLAG_PENDING_NAK) == 0);
+      
+      flow->flags &= ~IPS_FLOW_FLAG_PENDING_ACK;
+      err = ips_proto_send_ctrl_message(flow, OPCODE_ACK, 
+					&flow->ipsaddr->ctrl_msg_queued, NULL);
+    }
+    else {
+      psmi_assert_always(flow->flags & IPS_FLOW_FLAG_PENDING_NAK);
+      
+      flow->flags &= ~IPS_FLOW_FLAG_PENDING_NAK;
+      err = ips_proto_send_ctrl_message(flow, OPCODE_NAK, 
+					&flow->ipsaddr->ctrl_msg_queued, NULL);
+    }
     
-    /* If NAK hasn't been sent send an ACK */
-    if (!(flow->flags & IPS_FLOW_FLAG_NAK_SEND))
-      ips_proto_send_ctrl_message(flow, OPCODE_ACK, 
-				  &flow->ipsaddr->ctrl_msg_queued, NULL);
   }
   
 }

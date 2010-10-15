@@ -66,9 +66,9 @@ ips_flow_gen_ackflags(ips_scb_t *scb, struct ips_flow *flow))
     /* At every 16, request ack */
     else 
 #endif
-      if ((diff & 0xf) == 0) 
+      if (((diff & flow->ack_interval) == 0) || (flow->credits == 1))
 	scb->flags |= IPS_SEND_FLAG_ACK_REQ;
-    
+
     /* Bottom 8 bits wind up in protocol header fields, other bits
      * control other aspects of packet composition */
     return (uint8_t) (scb->flags & IPS_SEND_FLAG_PROTO_OPTS);
@@ -420,18 +420,41 @@ void
 ips_proto_send_ack(struct ips_recvhdrq *recvq, struct ips_flow *flow))
 {
   if_pt (recvq->proto->flags & IPS_PROTO_FLAG_COALESCE_ACKS) {
-    if (!(flow->flags & IPS_FLOW_FLAG_PENDING_ACK)) {
-      psmi_assert(SLIST_NEXT(flow, next) == NULL);
-      flow->flags |= IPS_FLOW_FLAG_PENDING_ACK;
+    if (flow->flags & IPS_FLOW_FLAG_PENDING_NAK) {
+      flow->flags &= ~IPS_FLOW_FLAG_PENDING_NAK; /* ACK clears NAK */
+    }
+    else if (!(flow->flags & IPS_FLOW_FLAG_PENDING_ACK)) {
       SLIST_INSERT_HEAD(&recvq->pending_acks, flow, next);
     }
+    
+    flow->flags |= IPS_FLOW_FLAG_PENDING_ACK;  
   }
   else {
     /* Coalesced ACKs disabled. Send ACK immediately */
     ips_proto_send_ctrl_message(flow, OPCODE_ACK, 
 				&flow->ipsaddr->ctrl_msg_queued, NULL);
   }
+}
 
+PSMI_ALWAYS_INLINE(
+void 
+ips_proto_send_nak(struct ips_recvhdrq *recvq, struct ips_flow *flow))
+{
+  if_pt (recvq->proto->flags & IPS_PROTO_FLAG_COALESCE_ACKS) {
+    if (flow->flags & IPS_FLOW_FLAG_PENDING_ACK) {
+      flow->flags &= ~IPS_FLOW_FLAG_PENDING_ACK; /* NAK clears ACK */
+    }
+    else if (!(flow->flags & IPS_FLOW_FLAG_PENDING_NAK)) {
+      SLIST_INSERT_HEAD(&recvq->pending_acks, flow, next);
+    }
+    
+    flow->flags |= IPS_FLOW_FLAG_PENDING_NAK;  
+  }
+  else {
+    /* Coalesced ACKs disabled. Send NAK immediately */
+    ips_proto_send_ctrl_message(flow, OPCODE_NAK, 
+				&flow->ipsaddr->ctrl_msg_queued, NULL);
+  }
 }
 
 /* return 1 if packet is next expected in flow
@@ -446,7 +469,7 @@ ips_proto_is_expected_or_nak(struct ips_recvhdrq_event *rcv_ev))
     uint32_t sequence_num = __be32_to_cpu(p_hdr->bth[2]) & LOWER_24_BITS;
     ptl_epaddr_flow_t flowid = ips_proto_flowid(p_hdr);
     struct ips_flow *flow = &ipsaddr->flows[flowid];
-
+    
     psmi_assert((flowid == EP_FLOW_GO_BACK_N_PIO) ||
 		(flowid == EP_FLOW_GO_BACK_N_DMA) ||
 		(flowid == EP_FLOW_GO_BACK_N_AM_REQ) ||
@@ -454,31 +477,51 @@ ips_proto_is_expected_or_nak(struct ips_recvhdrq_event *rcv_ev))
 		);
     
     /* If packet faced congestion generate BECN in NAK. */
-    if ((rcv_ev->is_congested & IPS_RECV_EVENT_FECN) &&
-	((flow->cca_ooo_pkts & 0xf) == 0)) {
+    if_pf ((rcv_ev->is_congested & IPS_RECV_EVENT_FECN) &&
+	   ((flow->cca_ooo_pkts & 0xf) == 0)) {
       /* Generate a BECN for every 16th OOO packet marked with a FECN. */
       flow->flags |= IPS_FLOW_FLAG_GEN_BECN;
+      flow->cca_ooo_pkts++;
       ipsaddr->stats.congestion_pkts++;
       rcv_ev->is_congested &= ~IPS_RECV_EVENT_FECN; /* Clear FECN event */
     }
     
     if_pf (flow->recv_seq_num.psn != sequence_num) {
-      flow->cca_ooo_pkts++;
+      int16_t diff = (int16_t) (sequence_num - flow->last_seq_num.val);
       
-      if ((!(flow->flags & IPS_FLOW_FLAG_NAK_SEND)) ||
-	  (flow->flags & IPS_FLOW_FLAG_GEN_BECN)) {
-	
-	if (!ips_proto_send_ctrl_message(flow, OPCODE_NAK,
-					 &ipsaddr->ctrl_msg_queued,
-					 NULL)) {
-	  flow->flags |= IPS_FLOW_FLAG_NAK_SEND;
-	}
+      if (diff < 0)
+	return 0;
+
+      flow->cca_ooo_pkts = diff;
+      if (flow->cca_ooo_pkts > flow->ack_interval) {
+	ipsaddr->stats.congestion_pkts++;
+	flow->flags |= IPS_FLOW_FLAG_GEN_BECN;
+	_IPATH_CCADBG("BECN Generation. Expected: %d, Got: %d.\n", flow->recv_seq_num.psn, sequence_num);
       }
+      flow->last_seq_num.val = sequence_num;
+      
+      if (!(flow->flags & IPS_FLOW_FLAG_NAK_SEND)) {	
+	/* Queue/Send NAK to peer  */
+	ips_proto_send_nak((struct ips_recvhdrq *) rcv_ev->recvq, flow);
+	flow->flags |= IPS_FLOW_FLAG_NAK_SEND;
+	flow->cca_ooo_pkts = 0;
+      } 
+      else if (flow->flags & IPS_FLOW_FLAG_GEN_BECN) {
+	/* Send Control message to throttle flow. Will clear flow flag and
+	 * reset cca_ooo_pkts. 
+	 */
+	ips_proto_send_ctrl_message(flow, OPCODE_FLOW_CCA_BECN, 
+				    &flow->ipsaddr->ctrl_msg_queued, 
+				    NULL);
+      }
+            
       return 0;
     }
     else {
       flow->flags &= ~IPS_FLOW_FLAG_NAK_SEND;
+      
       flow->recv_seq_num.psn += 1;
+      flow->last_seq_num.val = flow->recv_seq_num.val;
       flow->cca_ooo_pkts = 0;
       return 1;
     }

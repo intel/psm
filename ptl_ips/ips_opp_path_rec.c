@@ -144,10 +144,12 @@ ips_opp_get_path_rec(ips_path_type_t type, struct ips_proto *proto,
         
     /* Compute max timeout based on pkt life time for path */
     timeout_ack_ms = ((4096UL * (1UL << (opp_path_rec->opp_response.pkt_life & 0x3f)))/ 1000000UL);
-    opp_path_rec->ips.epr_timeout_ack = ms_2_cycles(1);
-    opp_path_rec->ips.epr_timeout_ack_max = ms_2_cycles(timeout_ack_ms);
-    opp_path_rec->ips.epr_timeout_ack_factor = 10;
-    
+    opp_path_rec->ips.epr_timeout_ack = 
+      ms_2_cycles(IPS_PROTO_ERRCHK_MS_MIN_DEFAULT);
+    opp_path_rec->ips.epr_timeout_ack_max = 
+      ms_2_cycles(IPS_PROTO_ERRCHK_MS_MIN_DEFAULT + timeout_ack_ms);
+    opp_path_rec->ips.epr_timeout_ack_factor = IPS_PROTO_ERRCHK_FACTOR_DEFAULT;
+
     /* Add path record into cache */
     strcpy(elid.key, eplid);
     elid.data = (void*) opp_path_rec;

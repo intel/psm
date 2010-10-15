@@ -72,16 +72,22 @@ struct ips_scbctrl {
 
     /* Send control blocks for each send */
     uint32_t			     scb_num;
+    uint32_t                         scb_num_cur;
     SLIST_HEAD(scb_free, ips_scb)    scb_free;
     void			    *scb_base;
     ips_scbctrl_avail_callback_fn_t  scb_avail_callback;
     void			    *scb_avail_context;
+
+    /* Immediate data for send buffers */		    
+    uint32_t                         scb_imm_size;
+    void                            *scb_imm_buf;
 
     /*
      * Send buffers (or bounce buffers) to keep user data if we need to
      * retransmit.
      */
     uint32_t				sbuf_num;
+    uint32_t                            sbuf_num_cur;
     SLIST_HEAD(sbuf_free, ips_scbbuf)	sbuf_free;
     void			       *sbuf_buf_alloc;
     uint32_t				sbuf_buf_size;
@@ -121,7 +127,8 @@ struct ips_scb {
 	
 
 	struct ips_scbctrl *scbc;
-  
+        void               *imm_payload;
+
         union {
 	  int (*callback) (void *);
 	  psm_am_completion_fn_t completion_am;
@@ -138,11 +145,12 @@ void	    ips_scbctrl_free(ips_scb_t *scb);
 int	    ips_scbctrl_bufalloc(ips_scb_t *scb);
 int	    ips_scbctrl_avail(struct ips_scbctrl *scbc);
 ips_scb_t * ips_scbctrl_alloc(struct ips_scbctrl *scbc, 
-			      int scbnum, uint32_t flags);
+			      int scbnum, int len, uint32_t flags);
 ips_scb_t * ips_scbctrl_alloc_tiny(struct ips_scbctrl *scbc);
 
 psm_error_t ips_scbctrl_init(const psmi_context_t *context, 
-		 uint32_t numscb, uint32_t numbufs, uint32_t bufsize, 
+		 uint32_t numscb, uint32_t numbufs, 
+		 uint32_t imm_size, uint32_t bufsize, 
 		 ips_scbctrl_avail_callback_fn_t, void *avail_context,
 		 struct ips_scbctrl *);
 psm_error_t ips_scbctrl_fini(struct ips_scbctrl *);

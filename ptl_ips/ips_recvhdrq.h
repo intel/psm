@@ -70,7 +70,7 @@ struct ips_recvhdrq_event {
 struct ips_recvhdrq_callbacks {
     int (*callback_packet_unknown)(const struct ips_recvhdrq_event *);
     int (*callback_subcontext)(const struct ips_recvhdrq_event *, uint32_t subcontext);
-    int (*callback_error)(const struct ips_recvhdrq_event *);
+    int (*callback_error)(struct ips_recvhdrq_event *);
 };
 
 psm_error_t 
@@ -144,7 +144,7 @@ struct ips_recvhdrq
 
     /* List of flows with pending acks for receive queue */
     SLIST_HEAD(pending_flows, ips_flow) pending_acks;
-	       
+
     uint32_t	      runtime_flags;
     volatile __u64   *spi_status; 
 };

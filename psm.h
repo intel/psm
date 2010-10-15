@@ -64,9 +64,9 @@ typedef struct psm_ep *psm_ep_t;
  * psm_mq_init).  */
 typedef struct psm_mq *psm_mq_t;
 
-#define PSM_VERNO       0x010d 
+#define PSM_VERNO       0x010e 
 #define PSM_VERNO_MAJOR 0x01   
-#define PSM_VERNO_MINOR 0x0d   
+#define PSM_VERNO_MINOR 0x0e   
 
 enum psm_error {
     
@@ -424,6 +424,11 @@ struct psm_ep_open_opts {
     uint64_t  service_id;     /* IB Service ID to use for endpoint */
     psm_path_res_t path_res_type;  /* Path resolution type */
 #endif
+#if PSM_VERNO >= 0x010e
+    int       senddesc_num;   /* Preallocated send descriptors */
+    int       imm_size;       /* Immediate data size for endpoint */
+#endif
+
 };
 
 /* InfiniPath endpoint creation

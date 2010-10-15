@@ -48,18 +48,19 @@
 #define MAX_VL_SUPPORTED 8
 #define PSM_CRC_SIZE_IN_BYTES 8 /* Change in ipath_user.h as well */
 #define PSM_CACHE_LINE_BYTES 64
+#define PSM_FLOW_CREDITS 64
 
 #ifndef BITS_PER_BYTE
 #  define BITS_PER_BYTE 8
 #endif
 
 /* Send retransmission */
-#define IPS_PROTO_SPIO_RETRY_US_DEFAULT	3    /* in uS */
+#define IPS_PROTO_SPIO_RETRY_US_DEFAULT	2    /* in uS */
 
-#define IPS_PROTO_ERRCHK_MS_MIN_DEFAULT	1     /* in millisecs */
-#define IPS_PROTO_ERRCHK_MS_MAX_DEFAULT	2000  /* in millisecs */
-#define IPS_PROTO_ERRCHK_FACTOR_DEFAULT 10
-#define PSM_TID_TIMEOUT_DEFAULT "1:2000:10" /* update from above params */
+#define IPS_PROTO_ERRCHK_MS_MIN_DEFAULT	8     /* in millisecs */
+#define IPS_PROTO_ERRCHK_MS_MAX_DEFAULT	32    /* in millisecs */
+#define IPS_PROTO_ERRCHK_FACTOR_DEFAULT 2
+#define PSM_TID_TIMEOUT_DEFAULT "8:32:2" /* update from above params */
 
 #define ADVANCE_SEQ_NUM(seq_num) seq_num = (seq_num + 1) & LOWER_24_BITS
 
@@ -73,10 +74,12 @@
 #define sec_2_cycles(sec) nanosecs_to_cycles(1000000000ULL*(sec))
 
 /* Per-flow flags */
-#define IPS_FLOW_FLAG_NAK_SEND	    0x1
-#define IPS_FLOW_FLAG_WRITEV	    0x2
-#define IPS_FLOW_FLAG_PENDING_ACK   0x4
-#define IPS_FLOW_FLAG_GEN_BECN      0x8
+#define IPS_FLOW_FLAG_NAK_SEND	    0x01
+#define IPS_FLOW_FLAG_WRITEV	    0x02
+#define IPS_FLOW_FLAG_PENDING_ACK   0x04
+#define IPS_FLOW_FLAG_GEN_BECN      0x08
+#define IPS_FLOW_FLAG_CONGESTED     0x10
+#define IPS_FLOW_FLAG_PENDING_NAK   0x20
 
 /* per-ipsaddr Flags (sess is ipsaddr) */
 #define SESS_FLAG_HAS_RCVTHREAD	    0x2

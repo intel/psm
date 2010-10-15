@@ -62,6 +62,7 @@ ips_am_short_request(ptl_t *ptl, psm_epaddr_t epaddr,
 		     void *completion_ctxt);
 
 psm_error_t ips_proto_am_init(struct ips_proto *proto, int num_of_send_bufs, 
+			      int num_of_send_desc, uint32_t imm_size,
 			      struct ips_proto_am *proto_am);
 
 psm_error_t ips_proto_am_fini(struct ips_proto_am *proto_am);
