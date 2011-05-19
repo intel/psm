@@ -179,6 +179,7 @@ ips_proto_init(const psmi_context_t *context, const ptl_t *ptl,
 
     proto->num_connected_to   = 0;
     proto->num_connected_from = 0;
+    proto->num_disconnect_requests = 0;
     
     /* Initialize IBTA related stuff (path record, SL2VL, CCA etc.) */
     if ((err = ips_ibta_init(proto)))
@@ -453,7 +454,7 @@ ips_proto_fini(struct ips_proto *proto, int force, uint64_t timeout_in)
     psmi_getenv("PSM_CLOSE_GRACE_PERIOD",
 		"Additional grace period in seconds for closing end-point.",
 		PSMI_ENVVAR_LEVEL_HIDDEN, PSMI_ENVVAR_TYPE_UINT,
-		(union psmi_envvar_val) (int) (PSMI_MIN_EP_CLOSE_TIMEOUT / SEC_ULL),
+		(union psmi_envvar_val) 0,
 		&grace_intval);
 
     if (getenv("PSM_CLOSE_GRACE_PERIOD")) {
@@ -471,26 +472,33 @@ ips_proto_fini(struct ips_proto *proto, int force, uint64_t timeout_in)
     if (t_grace_time > 0 && t_grace_time < PSMI_MIN_EP_CLOSE_TIMEOUT)
         t_grace_time = PSMI_MIN_EP_CLOSE_TIMEOUT;
 
+    /* At close we will busy wait for the grace interval to see if any
+     * receive progress is made. If progress is made we will wait for
+     * another grace interval, until either no progress is made or the
+     * entire grace period has passed. If the grace interval is too low
+     * we may miss traffic and exit too early. If the grace interval is
+     * too large the additional time spent while closing the program
+     * will become visible to the user. */
     psmi_getenv("PSM_CLOSE_GRACE_INTERVAL",
 		"Grace interval in seconds for closing end-point.",
 		PSMI_ENVVAR_LEVEL_HIDDEN, PSMI_ENVVAR_TYPE_UINT,
-		(union psmi_envvar_val) (int) (PSMI_MIN_EP_CLOSE_TIMEOUT / SEC_ULL),
+		(union psmi_envvar_val) 0,
 		&grace_intval);
 
     if (getenv("PSM_CLOSE_GRACE_INTERVAL")) {
         t_grace_interval = grace_intval.e_uint * SEC_ULL;
     }
-    else if (t_grace_time > 0) {
-        /* default to 1/5'th of the overall grace time */
-        t_grace_interval = t_grace_time / 5;
-    }
     else {
-        /* this is the infinite time-out case - use minimum grace interval */
-        t_grace_interval = PSMI_MIN_EP_CLOSE_TIMEOUT;
+        /* A heuristic is used to scale up the timeout linearly with 
+         * the number of endpoints, and we allow one second per 1000
+         * endpoints. */
+        t_grace_interval = (proto->ep->connections * SEC_ULL) / 1000;
     }
 
-    if (t_grace_interval < PSMI_MIN_EP_CLOSE_TIMEOUT)
-        t_grace_interval = PSMI_MIN_EP_CLOSE_TIMEOUT;
+    if (t_grace_interval < PSMI_MIN_EP_CLOSE_GRACE_INTERVAL)
+        t_grace_interval = PSMI_MIN_EP_CLOSE_GRACE_INTERVAL;
+    if (t_grace_interval > PSMI_MAX_EP_CLOSE_GRACE_INTERVAL)
+        t_grace_interval = PSMI_MAX_EP_CLOSE_GRACE_INTERVAL;
 
     PSMI_PLOCK_ASSERT();
 
@@ -539,14 +547,15 @@ ips_proto_fini(struct ips_proto *proto, int force, uint64_t timeout_in)
     t_grace_start = get_cycles();
 
     while (psmi_cycles_left(t_grace_start, t_grace_time)) {
-        uint64_t t_grace_interval_start = get_cycles();    
+        uint64_t t_grace_interval_start = get_cycles();
+	int num_disconnect_requests = proto->num_disconnect_requests;
         PSMI_BLOCKUNTIL(proto->ep, err, 
 		        (proto->num_connected_from == 0 ||
 		         !psmi_cycles_left(t_start, timeout_in)) &&
 		        (!psmi_cycles_left(t_grace_interval_start, t_grace_interval) ||
                          !psmi_cycles_left(t_grace_start, t_grace_time)));
-	if (err == PSM_OK_NO_PROGRESS) {
-	    /* nothing happened in the interval so break out early */
+	if (num_disconnect_requests == proto->num_disconnect_requests) {
+	    /* nothing happened in this grace interval so break out early */
 	    break;
 	}
     }

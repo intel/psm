@@ -301,6 +301,7 @@ struct ips_proto {
 
     int		    num_connected_to; 
     int		    num_connected_from;
+    int		    num_disconnect_requests;
 
     /* SL2VL table for protocol */
     int         sl2vl[16];

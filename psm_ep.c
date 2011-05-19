@@ -829,7 +829,7 @@ __psm_ep_close(psm_ep_t ep, int mode, int64_t timeout_in)
     psmi_getenv("PSM_CLOSE_TIMEOUT",
                 "End-point close timeout over-ride.",
                 PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_UINT,
-                (union psmi_envvar_val) (int) (PSMI_MIN_EP_CLOSE_TIMEOUT / SEC_ULL),
+                (union psmi_envvar_val) 0,
                 &timeout_intval);
 
     if (getenv("PSM_CLOSE_TIMEOUT")) {
@@ -844,6 +844,13 @@ __psm_ep_close(psm_ep_t ep, int mode, int64_t timeout_in)
 
     if (timeout_in > 0 && timeout_in < PSMI_MIN_EP_CLOSE_TIMEOUT)
 	timeout_in = PSMI_MIN_EP_CLOSE_TIMEOUT;
+
+    /* Infinite and excessive close time-out are limited here to a max.
+     * The "rationale" is that there is no point waiting around forever for
+     * graceful termination. Normal (or forced) process termination should clean 
+     * up the context state correctly even if termination is not graceful. */
+    if (timeout_in <= 0 || timeout_in < PSMI_MAX_EP_CLOSE_TIMEOUT)
+	timeout_in = PSMI_MAX_EP_CLOSE_TIMEOUT;
     _IPATH_PRDBG("Closing endpoint %p with force=%s and to=%.2f seconds and "
                  "%d connections\n",
 		 ep, mode == PSM_EP_CLOSE_FORCE ? "YES" : "NO", 

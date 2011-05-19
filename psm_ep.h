@@ -80,7 +80,12 @@
     PSMI_EPID_UNPACK_EXT(epid,lid,context,subcontext,hca_type,sl);	\
   } while (0)
 
-#define PSMI_MIN_EP_CLOSE_TIMEOUT   2*SEC_ULL
+#define PSMI_MIN_EP_CONNECT_TIMEOUT (2 * SEC_ULL)
+#define PSMI_MIN_EP_CLOSE_TIMEOUT   (2 * SEC_ULL)
+#define PSMI_MAX_EP_CLOSE_TIMEOUT   (60 * SEC_ULL)
+
+#define PSMI_MIN_EP_CLOSE_GRACE_INTERVAL (1 * SEC_ULL)
+#define PSMI_MAX_EP_CLOSE_GRACE_INTERVAL (10 * SEC_ULL)
 
 struct psm_ep {
     psm_epid_t		epid;	    /**> This endpoint's Endpoint ID */

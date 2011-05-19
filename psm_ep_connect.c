@@ -110,6 +110,8 @@ __psm_ep_connect(psm_ep_t ep, int num_of_epid,
         timeout = max(timeout, (num_toconnect * SEC_ULL) / 100);
     }
 
+    if (timeout > 0 && timeout < PSMI_MIN_EP_CONNECT_TIMEOUT)
+        timeout = PSMI_MIN_EP_CONNECT_TIMEOUT;
     _IPATH_PRDBG("Connect to %d endpoints with time-out of %.2f secs\n",
                  num_toconnect, (double) timeout/ 1e9);
 

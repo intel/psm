@@ -813,6 +813,7 @@ ips_proto_process_connect(struct ips_proto *proto, psm_epid_t epid,
 	    int ipsaddr_do_free = 0;
 	    psmi_assert_always(paylen >= IPS_DISCONNECT_REQREP_MINIMUM_SIZE);
 	    _IPATH_VDBG("Got a disconnect from %s\n", psmi_epaddr_get_name(epid));
+	    proto->num_disconnect_requests++;
 	    /* It's possible to get a disconnection request on a ipsaddr that
 	     * we've since removed if the request is a dupe.  Instead of
 	     * silently dropping the packet, we "echo" the request in the
@@ -1348,7 +1349,6 @@ ips_proto_disconnect(struct ips_proto *proto, int force, int numep,
     union psmi_envvar_val warn_intval;
     unsigned warning_secs;
 
-    psmi_assert_always(timeout_in > 0);
     psmi_assert_always(numep > 0);
 
     psmi_getenv("PSM_DISCONNECT_CREDITS",
