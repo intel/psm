@@ -766,7 +766,7 @@ ips_proto_process_connect(struct ips_proto *proto, psm_epid_t epid,
 		ipsaddr = &ipsaddr_f;
 		memset(&ipsaddr_f, 0, sizeof(ips_epaddr_t));
 		ipsaddr_f.epr.epr_context = src_context;
-		ipsaddr_f.epr.epr_subcontext = p_hdr->dst_subcontext;
+		ipsaddr_f.epr.epr_subcontext = p_hdr->src_subcontext;
 		ipsaddr_f.epr.epr_pkt_context = src_context & 0xf;
 	
 		/* QLE72XX is special for context 16 */
