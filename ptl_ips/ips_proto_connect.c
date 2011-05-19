@@ -1094,7 +1094,7 @@ ips_proto_connect(struct ips_proto *proto, int numep,
     /* Setup warning interval */
     psmi_getenv("PSM_CONNECT_WARN_INTERVAL",
 		"Period in seconds to warn if connections are not completed."
-		"Default is 300 seconds.",
+		"Default is 300 seconds, 0 to disable",
 		PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_UINT,
 		(union psmi_envvar_val) 300,
 		&warn_intval);
@@ -1221,7 +1221,7 @@ ips_proto_connect(struct ips_proto *proto, int numep,
 		    err = PSM_TIMEOUT;
 		    goto err_timeout;
 		}
-		if (get_cycles() >= to_warning_next) {
+		if (to_warning_interval && get_cycles() >= to_warning_next) {
 		    uint64_t waiting_time = 
 			cycles_to_nanosecs(get_cycles() - t_start) / SEC_ULL;
 		    const char *first_name = NULL;

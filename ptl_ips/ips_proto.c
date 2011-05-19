@@ -459,12 +459,16 @@ ips_proto_fini(struct ips_proto *proto, int force, uint64_t timeout_in)
     if (getenv("PSM_CLOSE_GRACE_PERIOD")) {
         t_grace_time = grace_intval.e_uint * SEC_ULL;
     }
-    else {
+    else if (timeout_in > 0) {
         /* default to half of the close time-out */
         t_grace_time = timeout_in / 2;
     }
+    else {
+        /* propagate the infinite time-out case */
+        t_grace_time = 0;
+    }
 
-    if (t_grace_time < PSMI_MIN_EP_CLOSE_TIMEOUT)
+    if (t_grace_time > 0 && t_grace_time < PSMI_MIN_EP_CLOSE_TIMEOUT)
         t_grace_time = PSMI_MIN_EP_CLOSE_TIMEOUT;
 
     psmi_getenv("PSM_CLOSE_GRACE_INTERVAL",
@@ -476,9 +480,13 @@ ips_proto_fini(struct ips_proto *proto, int force, uint64_t timeout_in)
     if (getenv("PSM_CLOSE_GRACE_INTERVAL")) {
         t_grace_interval = grace_intval.e_uint * SEC_ULL;
     }
-    else {
+    else if (t_grace_time > 0) {
         /* default to 1/5'th of the overall grace time */
         t_grace_interval = t_grace_time / 5;
+    }
+    else {
+        /* this is the infinite time-out case - use minimum grace interval */
+        t_grace_interval = PSMI_MIN_EP_CLOSE_TIMEOUT;
     }
 
     if (t_grace_interval < PSMI_MIN_EP_CLOSE_TIMEOUT)

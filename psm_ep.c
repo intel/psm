@@ -835,14 +835,14 @@ __psm_ep_close(psm_ep_t ep, int mode, int64_t timeout_in)
     if (getenv("PSM_CLOSE_TIMEOUT")) {
         timeout_in = timeout_intval.e_uint * SEC_ULL;
     }
-    else {
+    else if (timeout_in > 0) {
         /* The timeout parameter provides the minimum timeout. A heuristic
 	 * is used to scale up the timeout linearly with the number of 
 	 * endpoints, and we allow one second per 100 endpoints. */
         timeout_in = max(timeout_in, (ep->connections * SEC_ULL) / 100);
     }
 
-    if (timeout_in < PSMI_MIN_EP_CLOSE_TIMEOUT)
+    if (timeout_in > 0 && timeout_in < PSMI_MIN_EP_CLOSE_TIMEOUT)
 	timeout_in = PSMI_MIN_EP_CLOSE_TIMEOUT;
     _IPATH_PRDBG("Closing endpoint %p with force=%s and to=%.2f seconds and "
                  "%d connections\n",

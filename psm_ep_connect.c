@@ -103,7 +103,7 @@ __psm_ep_connect(psm_ep_t ep, int num_of_epid,
     if (getenv("PSM_CONNECT_TIMEOUT")) {
         timeout = timeout_intval.e_uint * SEC_ULL;
     }
-    else {
+    else if (timeout > 0) {
         /* The timeout parameter provides the minimum timeout. A heuristic
 	 * is used to scale up the timeout linearly with the number of 
 	 * endpoints, and we allow one second per 100 endpoints. */
