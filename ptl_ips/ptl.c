@@ -52,7 +52,16 @@ int
 ips_subcontext_process(const struct ips_recvhdrq_event *rcv_ev, uint32_t subcontext)
 {
     struct ptl_shared *recvshc = rcv_ev->proto->ptl->recvshc;
-    return ips_writehdrq_append(&recvshc->writeq[subcontext], rcv_ev);
+    if_pt (subcontext != recvshc->subcontext &&
+           subcontext < recvshc->subcontext_cnt) {
+        return ips_writehdrq_append(&recvshc->writeq[subcontext], rcv_ev);
+    }
+    else {
+        _IPATH_VDBG("Drop pkt for subcontext %d out of %d (I am %d) : errors 0x%x\n",
+		    (int) subcontext, (int) recvshc->subcontext_cnt,
+		    (int) recvshc->subcontext, (unsigned) rcv_ev->error_flags);
+        return IPS_RECVHDRQ_BREAK;
+    }
 }
 
 static
