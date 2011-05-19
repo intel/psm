@@ -472,6 +472,7 @@ ips_recvhdrq_progress(struct ips_recvhdrq *recvq)
 					    : ips_recvq_tail_get(&recvq->hdrq);
     const uint32_t *rcv_hdr = 
 	    (const uint32_t *) recvq->hdrq.base_addr + state->hdrq_head;
+    uint32_t tmp_hdrq_head;
     
     done = !next_hdrq_is_ready();
 
@@ -594,8 +595,13 @@ skip_packet:
 	    state->rcv_egr_index_head = ipath_hdrget_index(rhf);
 
 skip_packet_no_egr_update:
-	state->hdrq_head += hdrq_elemsz;
-	if_pf (state->hdrq_head > recvq->hdrq_elemlast)
+        /* Note that state->hdrq_head is sampled speculatively by the code
+         * in ips_ptl_shared_poll() when context sharing, so it is not safe
+         * for this shared variable to temporarily exceed the last element. */
+        tmp_hdrq_head = state->hdrq_head + hdrq_elemsz;
+	if_pt (tmp_hdrq_head <= recvq->hdrq_elemlast)
+          state->hdrq_head = tmp_hdrq_head;
+        else
 	  state->hdrq_head = 0;
 	
 	if_pf (has_no_rtail && ++recvq->state->hdrq_rhf_seq > LAST_RHF_SEQNO)
