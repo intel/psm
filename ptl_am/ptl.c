@@ -44,7 +44,7 @@ static
 psm_error_t
 ptl_handle_rtsmatch_request(psm_mq_req_t req, int was_posted, amsh_am_token_t *tok)
 {
-    psm_amarg_t	args[4];
+    psm_amarg_t	args[5];
     psm_epaddr_t epaddr = req->rts_peer;
     ptl_t *ptl = epaddr->ptl;
     int pid = 0;
