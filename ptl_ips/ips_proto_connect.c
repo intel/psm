@@ -1013,18 +1013,17 @@ ips_proto_connect(struct ips_proto *proto, int numep,
 
     /* All timeout values are in cycles */
     uint64_t t_start = get_cycles();
-    /* Print a timeout every 30 seconds or at least once if the connect timeout
-     * is less than 30seconds */
+    /* Print a timeout at the warning interval */
     union psmi_envvar_val warn_intval;
     uint64_t to_warning_interval;
     uint64_t to_warning_next;
 
-    /* Setup warning interval - default is 30 seconds */
+    /* Setup warning interval */
     psmi_getenv("PSM_CONNECT_WARN_INTERVAL",
 		"Period in seconds to warn if connections are not completed."
-		"Default is 30 seconds.",
+		"Default is 300 seconds.",
 		PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_UINT,
-		(union psmi_envvar_val) 30,
+		(union psmi_envvar_val) 300,
 		&warn_intval);
     
     to_warning_interval = nanosecs_to_cycles(warn_intval.e_uint * SEC_ULL);
@@ -1149,16 +1148,23 @@ ips_proto_connect(struct ips_proto *proto, int numep,
 		if (get_cycles() >= to_warning_next) {
 		    uint64_t waiting_time = 
 			cycles_to_nanosecs(get_cycles() - t_start) / SEC_ULL;
+		    const char *first_name = NULL;
+		    int num_waiting = 0;
 
 		    for (i = 0; i < numep; i++) {
 			if (!array_of_epid_mask[i] || 
 			     array_of_errors[i] != PSM_EPID_UNKNOWN)
 			    continue;
-			_IPATH_INFO("Couldn't connect to %s. "
+			if (!first_name)
+			    first_name = psmi_epaddr_get_name(array_of_epid[i]);
+			num_waiting++;
+		    }
+		    if (first_name) {
+			_IPATH_INFO("Couldn't connect to %s (and %d others). "
 			    "Time elapsed %02i:%02i:%02i. Still trying...\n",
-			    psmi_epaddr_get_name(array_of_epid[i]),
-                            (int) (waiting_time / 3600),
-                            (int) ((waiting_time / 60) - 
+			    first_name, num_waiting,
+			    (int) (waiting_time / 3600),
+                            (int) ((waiting_time / 60) -
 				   ((waiting_time / 3600) * 60)),
                             (int) (waiting_time - ((waiting_time / 60) * 60)));
 		    }
