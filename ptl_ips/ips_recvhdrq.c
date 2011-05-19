@@ -536,10 +536,10 @@ ips_recvhdrq_progress(struct ips_recvhdrq *recvq)
 	  if ((rcv_ev.error_flags & INFINIPATH_RHF_H_TIDERR) || 
 	      (rcv_ev.error_flags & INFINIPATH_RHF_H_TFSEQERR) ||
 	      (rcv_ev.error_flags & INFINIPATH_RHF_H_TFGENERR)) {
-		/* Subports need to see expected tid errors */
+		/* Subcontexts need to see expected tid errors */
 		if (rcv_ev.ptype == RCVHQ_RCV_TYPE_EXPECTED &&
 		    dest_subcontext != recvq->subcontext)
-			goto subport_packet;
+			goto subcontext_packet;
 
 		recvq->recvq_callbacks.callback_error(&rcv_ev);
 
@@ -573,7 +573,7 @@ ips_recvhdrq_progress(struct ips_recvhdrq *recvq)
 	    }
 	}
 	else {
-subport_packet:
+subcontext_packet:
 	    /* If the destination is not our subcontext, process message
 	     * as a subcontext message (shared contexts) */
 	    rcv_ev.ipsaddr = NULL;
