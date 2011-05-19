@@ -154,6 +154,7 @@ psm_error_t
 __psm_init(int *major, int *minor)
 {
     psm_error_t	err = PSM_OK;
+    union psmi_envvar_val env_tmask;
 
     if (psmi_isinit == PSMI_INITIALIZED)
 	goto update;
@@ -204,6 +205,14 @@ __psm_init(int *major, int *minor)
     psmi_verno_client_val = min(PSMI_VERNO_MAKE(*major, *minor), psmi_verno);
 
     psmi_isinit = PSMI_INITIALIZED;
+    /* infinipath_debug lives in libinfinipath.so */
+    psmi_getenv("PSM_TRACEMASK",
+                "Mask flags for tracing",
+                PSMI_ENVVAR_LEVEL_USER,
+                PSMI_ENVVAR_TYPE_ULONG_FLAGS,
+                (union psmi_envvar_val) infinipath_debug,
+                &env_tmask);
+    infinipath_debug = (long) env_tmask.e_ulong;
 
     /* The "real thing" is done in ipath_proto.c as a constructor function, but
      * we getenv it here to report what we're doing with the setting */
