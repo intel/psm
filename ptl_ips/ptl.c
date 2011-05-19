@@ -646,7 +646,8 @@ shrecvq_init(ptl_t *ptl, const psmi_context_t *context)
     psmi_assert_always(recvshc->subcontext_cnt <= INFINIPATH_MAX_SUBCONTEXT);
     psmi_assert_always(recvshc->subcontext < recvshc->subcontext_cnt);
 
-    if ((err = ips_subcontext_ureg_get(ptl, context, recvshc->subcontext_ureg)))
+    if ((err = ips_subcontext_ureg_get(ptl, context, recvshc->subcontext_ureg,
+                                       recvshc->subcontext_cnt)))
         goto fail;
     if ((err = ips_subcontext_ureg_initialize(
            ptl, recvshc->subcontext, recvshc->subcontext_ureg[recvshc->subcontext])))

@@ -36,7 +36,8 @@
 
 psm_error_t
 ips_subcontext_ureg_get(ptl_t *ptl, const psmi_context_t *context,
-                     struct ips_subcontext_ureg **uregp)
+			struct ips_subcontext_ureg **uregp,
+			uint32_t subcontext_cnt)
 {
     psm_error_t err = PSM_OK;
     const struct ipath_base_info *base_info = &context->base_info;
@@ -48,7 +49,7 @@ ips_subcontext_ureg_get(ptl_t *ptl, const psmi_context_t *context,
     for (i = 0; i < INFINIPATH_MAX_SUBCONTEXT; i++) {
         struct ips_subcontext_ureg *subcontext_ureg = 
           (struct ips_subcontext_ureg *) &all_subcontext_uregbase[_IPATH_UregMax*8];
-        *uregp++ = subcontext_ureg;
+        *uregp++ = (i < subcontext_cnt) ? subcontext_ureg : NULL;
         all_subcontext_uregbase += pagesize / sizeof(uint64_t);
     }
     return err;

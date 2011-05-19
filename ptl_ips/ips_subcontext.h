@@ -48,7 +48,8 @@ struct ips_subcontext_ureg {
 
 psm_error_t
 ips_subcontext_ureg_get(ptl_t *ptl, const psmi_context_t *context,
-                     struct ips_subcontext_ureg **uregp);
+			struct ips_subcontext_ureg **uregp,
+                        uint32_t subcontext_cnt);
 
 psm_error_t
 ips_subcontext_ureg_initialize(ptl_t *ptl, uint32_t subcontext,
