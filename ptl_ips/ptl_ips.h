@@ -126,9 +126,6 @@ struct ptl_shared {
     ptl_t  *ptl;		            /* backptr to main ptl */
     uint32_t subcontext;
     uint32_t subcontext_cnt;
-    unsigned int poll_counter;
-    unsigned int poll_period;
-    unsigned int poll_mask;
 
     pthread_spinlock_t *context_lock;
     struct ips_subcontext_ureg *subcontext_ureg[INFINIPATH_MAX_SUBCONTEXT];
@@ -136,11 +133,6 @@ struct ptl_shared {
     struct ips_recvhdrq_state recvq_state;  /* subcontext receive queue state */
     struct ips_writehdrq writeq[INFINIPATH_MAX_SUBCONTEXT]; /* peer subcontexts */
 };
-
-/* Min period and max period must be powers of 2 */
-#define PTL_SHARED_POLL_SHIFT		8
-#define PTL_SHARED_POLL_MIN_PERIOD	(1 << PTL_SHARED_POLL_SHIFT)
-#define PTL_SHARED_POLL_MAX_PERIOD	(1024 << PTL_SHARED_POLL_SHIFT)
 
 /*
  * Connect/disconnect are wrappers around psm proto's connect/disconnect,
