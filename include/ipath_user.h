@@ -117,6 +117,10 @@ struct _ipath_ctrl *ipath_userinit(int32_t, struct ipath_user_info *,
 // the unit is valid, but no LID has been assigned.
 int ipath_get_port_lid(uint16_t, uint16_t);
 
+// Given the unit number and port, return an error, or the corresponding GID
+// Returns an int, so -1 indicates an error.
+int ipath_get_port_gid(uint16_t, uint16_t, uint64_t *hi, uint64_t *lo);
+
 // Given the unit number, return an error, or the corresponding LMC value
 // for the port
 // Returns an int, so -1 indicates an error.  0

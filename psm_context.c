@@ -152,6 +152,7 @@ psmi_context_open(const psm_ep_t ep, long unit_id, long port,
 {
     long open_timeout = 0;
     int lid;
+    uint64_t gid_hi, gid_lo;
     char dev_name[MAXPATHLEN];
     psm_error_t err = PSM_OK;
     uint32_t driver_verno, hca_type;
@@ -230,14 +231,24 @@ retry_open:
     }
 
     if ((lid = ipath_get_port_lid(context->base_info.spi_unit,
-	context->base_info.spi_port)) == -1) {
+				  context->base_info.spi_port)) == -1) {
 	err = psmi_handle_error(NULL, 
 	        PSM_EP_DEVICE_FAILURE, 
 		"Can't get InfiniBand LID in psm_ep_open: is SMA running?");
 	goto fail;
     }
+    if (ipath_get_port_gid(context->base_info.spi_unit,
+			   context->base_info.spi_port,
+			   &gid_hi, &gid_lo) == -1) {
+	err = psmi_handle_error(NULL, 
+	        PSM_EP_DEVICE_FAILURE, 
+		"Can't get InfiniBand GID in psm_ep_open: is SMA running?");
+	goto fail;
+    }
     ep->unit_id = context->base_info.spi_unit;
     ep->portnum = context->base_info.spi_port;
+    ep->gid_hi = gid_hi;
+    ep->gid_lo = gid_lo;
 
     context->ep = (psm_ep_t) ep;
     context->runtime_flags = context->base_info.spi_runtime_flags;

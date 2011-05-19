@@ -92,7 +92,8 @@ __psm_ep_num_devunits(uint32_t *num_units_o)
 PSMI_API_DECL(psm_ep_num_devunits)
 
 static psm_error_t
-psmi_ep_devlids(uint16_t **lids, uint32_t *num_lids_o)
+psmi_ep_devlids(uint16_t **lids, uint32_t *num_lids_o,
+		uint64_t my_gid_hi, uint64_t my_gid_lo)
 {
     static uint16_t *ipath_lids = NULL;
     static uint32_t nlids;
@@ -118,6 +119,8 @@ psmi_ep_devlids(uint16_t **lids, uint32_t *num_lids_o)
 	    int j;
 	    for (j = 1; j <= IPATH_MAX_PORT; j++) {
 		    int lid = ipath_get_port_lid(i, j);
+		    int ret;
+		    uint64_t gid_hi = 0, gid_lo = 0;
 		    /* OK if trying to get LID fails for port > 1 */
 		    if (lid == -1 && j == 1) {
 			err = psmi_handle_error(NULL, PSM_EP_DEVICE_FAILURE,
@@ -126,6 +129,34 @@ psmi_ep_devlids(uint16_t **lids, uint32_t *num_lids_o)
 		    }
 		    else if (lid == -1) /* port not present */
 			    continue;
+		    ret = ipath_get_port_gid(i, j, &gid_hi, &gid_lo);
+		    /* OK if trying to get LID fails for port > 1 */
+		    if (ret == -1 && j == 1) {
+			err = psmi_handle_error(NULL, PSM_EP_DEVICE_FAILURE,
+				    "Couldn't get gid for unit %d:%d", i, j);
+			goto fail;
+		    }
+		    else if (ret == -1) /* port not present */
+			continue;
+		    else if (my_gid_hi != gid_hi) {
+		        _IPATH_VDBG("LID %d, unit %d, port %d, "
+                                    "mismatched GID %llx:%llx and "
+				    "%llx:%llx\n",
+				    lid, i, j,
+				    (unsigned long long) gid_hi,
+				    (unsigned long long) gid_lo,
+				    (unsigned long long) my_gid_hi,
+				    (unsigned long long) my_gid_lo);
+		        continue;
+		    }
+		    _IPATH_VDBG("LID %d, unit %d, port %d, "
+                                "matching GID %llx:%llx and "
+				"%llx:%llx\n", lid, i, j,
+				(unsigned long long) gid_hi,
+				(unsigned long long) gid_lo,
+				(unsigned long long) my_gid_hi,
+				(unsigned long long) my_gid_lo);
+
 		    ipath_lids[nlids++] = (uint16_t) lid;
 	    }
 	}
@@ -277,7 +308,7 @@ __psm_ep_epid_share_memory(psm_ep_t ep, psm_epid_t epid, int *result_o)
 	    result = 1;
     }
     else {
-	err = psmi_ep_devlids(&lids, &num_lids);
+        err = psmi_ep_devlids(&lids, &num_lids, ep->gid_hi, ep->gid_lo);
 	if (err)
 	    return err;
 	for (i = 0; i < num_lids; i++) {

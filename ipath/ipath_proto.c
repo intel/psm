@@ -586,7 +586,7 @@ int ipath_get_port_lid(uint16_t unit, uint16_t port)
 		    _IPATH_DBG("Failed to get LID for unit %u:%u: %s\n",
 			unit, port, strerror(errno));
     }
-    else
+    else {
         ret = val;
 
 	if(getenv("IPATH_DIAG_LID_LOOP")) {
@@ -608,6 +608,52 @@ int ipath_get_port_lid(uint16_t unit, uint16_t port)
 			ret += info.context;
 		}
 	}
+    }
+
+    return ret;
+}
+
+
+// Given the unit number, return an error, or the corresponding GID
+// For now, it's used only so the MPI code can determine its fabric ID.
+// Returns an int, so -1 indicates an error.
+// No error print because we call this for both potential
+// ports without knowing if both ports exist (or are connected)
+int ipath_get_port_gid(uint16_t unit, uint16_t port,
+                       uint64_t *hi, uint64_t *lo)
+{
+    char *gid_str = NULL;
+    int ret;
+
+    ret = ipath_sysfs_port_read(unit, port, "gids/0", &gid_str);
+
+    if (ret == -1) {
+	if (errno == ENODEV)
+		/* this is "normal" for port != 1, on single
+		 * port chips */
+	    _IPATH_VDBG("Failed to get GID for unit %u:%u: %s\n",
+			unit, port, strerror(errno));
+	else
+	    _IPATH_DBG("Failed to get GID for unit %u:%u: %s\n",
+		       unit, port, strerror(errno));
+    }
+    else {
+        int gid[8];
+        if (sscanf(gid_str, "%4x:%4x:%4x:%4x:%4x:%4x:%4x:%4x", 
+		   &gid[0], &gid[1], &gid[2], &gid[3],
+		   &gid[4], &gid[5], &gid[6], &gid[7]) != 8) {
+	    _IPATH_DBG("Failed to parse GID for unit %u:%u: %s\n",
+		       unit, port, gid_str);
+	    ret = -1;
+	}
+	else {
+            *hi = (((uint64_t) gid[0]) << 48) | (((uint64_t) gid[1]) << 32) | 
+	          (((uint64_t) gid[2]) << 16) | (((uint64_t) gid[3]) << 0);
+            *lo = (((uint64_t) gid[4]) << 48) | (((uint64_t) gid[5]) << 32) | 
+	          (((uint64_t) gid[6]) << 16) | (((uint64_t) gid[7]) << 0);
+	}
+        free(gid_str);
+    }
 
     return ret;
 }

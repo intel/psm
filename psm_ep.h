@@ -111,6 +111,9 @@ struct psm_ep {
     /* Active Message handler table */
     void    **am_htable;
 
+    uint64_t    gid_hi;
+    uint64_t    gid_lo;
+
     ptl_ctl_t	ptl_amsh;
     ptl_ctl_t	ptl_ips;
     ptl_ctl_t	ptl_self;
