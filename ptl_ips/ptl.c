@@ -707,6 +707,10 @@ shrecvq_fini(ptl_t *ptl)
     psm_error_t err = PSM_OK;
     int i;
 
+    /* disable my write header queue before deallocation */
+    i = ptl->recvshc->subcontext;
+    ptl->recvshc->subcontext_ureg[i]->writeq_state.enabled = 0;
+
     if ((err = ips_recvhdrq_fini(&ptl->recvq)))
         goto fail;
 

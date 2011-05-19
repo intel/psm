@@ -74,6 +74,7 @@ ips_writehdrq_init(const psmi_context_t *context,
 	writeq->hdrq_hdr_copysz = writeq->hdrq.elemsz * sizeof(uint32_t);
 	writeq->state->hdrq_rhf_seq = 0; /* _seq is ignored */
     }
+    writeq->state->enabled = 1;
     return PSM_OK;
 }
 

@@ -49,6 +49,7 @@
 struct ips_writehdrq_state
 {
     uint32_t		     hdrq_rhf_seq;	/* last seq */
+    uint32_t		     enabled;		/* enables writing */
 };
 
 struct ips_writehdrq
@@ -102,11 +103,10 @@ ips_writehdrq_append(struct ips_writehdrq *writeq,
 		     const struct ips_recvhdrq_event *rcv_ev))
 {
     const uint32_t *rcv_hdr = rcv_ev->rcv_hdr;
-    const uint32_t write_hdr_head = ips_recvq_head_get(&writeq->hdrq);
-    uint32_t write_hdr_tail = ips_recvq_tail_get(&writeq->hdrq);
-    uint32_t *write_hdr = writeq->hdrq.base_addr + write_hdr_tail;
-    uint32_t *write_rhf = write_hdr + writeq->hdrq_rhf_off;
-
+    uint32_t write_hdr_head;
+    uint32_t write_hdr_tail;
+    uint32_t *write_hdr;
+    uint32_t *write_rhf;
     char *write_payload = NULL;
     uint32_t next_write_hdr_tail;
     uint32_t rcv_paylen;
@@ -115,6 +115,17 @@ ips_writehdrq_append(struct ips_writehdrq *writeq,
 	uint64_t    u64;
     } rhf;
     int result = IPS_RECVHDRQ_CONTINUE;
+
+    /* Drop packet if write header queue is disabled */
+    if (!writeq->state->enabled) {
+        result = IPS_RECVHDRQ_BREAK;
+        goto done;
+    }
+
+    write_hdr_head = ips_recvq_head_get(&writeq->hdrq);
+    write_hdr_tail = ips_recvq_tail_get(&writeq->hdrq);
+    write_hdr = writeq->hdrq.base_addr + write_hdr_tail;
+    write_rhf = write_hdr + writeq->hdrq_rhf_off;
 
     /* Drop packet if write header queue is full */
     next_write_hdr_tail = write_hdr_tail + writeq->hdrq.elemsz;
