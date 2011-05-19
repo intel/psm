@@ -236,13 +236,7 @@ ips_ptl_init(const psm_ep_t ep, ptl_t *ptl, ptl_ctl_t *ctl)
      * In 'context', runtime flags reflect what the driver is capable of.
      * In 'ptl', runtime flags reflect the features we can or want to use in
      *           the driver's supported runtime flags.
-     *
-     * TODO: Look at supporting a receive thread in shared contexts
      */
-    if (enable_shcontexts) {
-	_IPATH_PRDBG("Disabling rcv thread in shared contexts\n");
-	ptl->runtime_flags &= ~PSMI_RUNTIME_RCVTHREAD;
-    }
 
     /*
      * This timer is to be used to check the context's status at every
