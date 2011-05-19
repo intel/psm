@@ -201,7 +201,7 @@ rcvthread_initsched(struct ptl_rcvthread *rcvc)
 	else {
     	if (nparsed > 0 && tvals[0] > 1000) 
     	    invalid = 1;
-    	if (nparsed > 1 && (tvals[1] > 1000 || tvals[1] > tvals[0]))
+    	if (nparsed > 1 && (tvals[1] > 1000 || tvals[1] < tvals[0]))
     	    invalid = 1;
     	if (nparsed > 2 && tvals[2] > 10)
     	    invalid = 1;
