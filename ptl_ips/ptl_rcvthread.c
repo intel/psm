@@ -39,7 +39,7 @@
 #include "ips_recvhdrq.h"
 
 /* All in milliseconds */
-#define RCVTHREAD_TO_MIN_FREQ	    1	   /* min of 1 poll per sec */
+#define RCVTHREAD_TO_MIN_FREQ	    10	   /* min of 10 polls per sec */
 #define RCVTHREAD_TO_MAX_FREQ	    100    /* max of 100 polls per sec */
 #define RCVTHREAD_TO_SHIFT	    1
 
