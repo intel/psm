@@ -103,6 +103,7 @@ struct psm_ep {
     uint32_t    ipath_num_descriptors; /** Number of allocated scb descriptors*/
     uint32_t    ipath_imm_size;     /** Immediate data size */
     uint32_t	shm_mbytes;	    /**> Number of shared memory pages */
+    uint32_t	connections;	    /**> Number of connections */	
 
     psmi_context_t	context;
     char	*context_mylabel;

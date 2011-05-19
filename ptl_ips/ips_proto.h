@@ -467,6 +467,7 @@ struct ptl_epaddr {
     uint32_t ctrl_msg_queued; /* bitmap of queued control messages to be send */
     uint32_t delay_in_ms;   /* used in close */
     uint64_t s_timeout;	    /* used as a time in close */
+    int credit;
     
     pthread_mutex_t sesslock;
     struct ptl_epaddr_stats stats;

@@ -444,9 +444,45 @@ ips_proto_fini(struct ips_proto *proto, int force, uint64_t timeout_in)
 {
     struct psmi_eptab_iterator itor;
     uint64_t t_start;
+    uint64_t t_grace_start, t_grace_time, t_grace_finish, t_grace_interval;
     psm_epaddr_t epaddr;
     psm_error_t err = PSM_OK;
     int i;
+    union psmi_envvar_val grace_intval;
+
+    psmi_getenv("PSM_CLOSE_GRACE_PERIOD",
+		"Additional grace period in seconds for closing end-point.",
+		PSMI_ENVVAR_LEVEL_HIDDEN, PSMI_ENVVAR_TYPE_UINT,
+		(union psmi_envvar_val) (int) (PSMI_MIN_EP_CLOSE_TIMEOUT / SEC_ULL),
+		&grace_intval);
+
+    if (getenv("PSM_CLOSE_GRACE_PERIOD")) {
+        t_grace_time = grace_intval.e_uint * SEC_ULL;
+    }
+    else {
+        /* default to half of the close time-out */
+        t_grace_time = timeout_in / 2;
+    }
+
+    if (t_grace_time < PSMI_MIN_EP_CLOSE_TIMEOUT)
+        t_grace_time = PSMI_MIN_EP_CLOSE_TIMEOUT;
+
+    psmi_getenv("PSM_CLOSE_GRACE_INTERVAL",
+		"Grace interval in seconds for closing end-point.",
+		PSMI_ENVVAR_LEVEL_HIDDEN, PSMI_ENVVAR_TYPE_UINT,
+		(union psmi_envvar_val) (int) (PSMI_MIN_EP_CLOSE_TIMEOUT / SEC_ULL),
+		&grace_intval);
+
+    if (getenv("PSM_CLOSE_GRACE_INTERVAL")) {
+        t_grace_interval = grace_intval.e_uint * SEC_ULL;
+    }
+    else {
+        /* default to 1/5'th of the overall grace time */
+        t_grace_interval = t_grace_time / 5;
+    }
+
+    if (t_grace_interval < PSMI_MIN_EP_CLOSE_TIMEOUT)
+        t_grace_interval = PSMI_MIN_EP_CLOSE_TIMEOUT;
 
     PSMI_PLOCK_ASSERT();
 
@@ -491,13 +527,28 @@ ips_proto_fini(struct ips_proto *proto, int force, uint64_t timeout_in)
         psmi_free(errs);
         psmi_free(epaddr_array);
     }
-    
-    PSMI_BLOCKUNTIL(proto->ep, err, 
-		    proto->num_connected_from == 0 ||
-		    !psmi_cycles_left(t_start, timeout_in));
 
-    _IPATH_PRDBG("Closing endpoint disconnect left to=%d,from=%d\n",
-	    proto->num_connected_to, proto->num_connected_from);
+    t_grace_start = get_cycles();
+
+    while (psmi_cycles_left(t_grace_start, t_grace_time)) {
+        uint64_t t_grace_interval_start = get_cycles();    
+        PSMI_BLOCKUNTIL(proto->ep, err, 
+		        (proto->num_connected_from == 0 ||
+		         !psmi_cycles_left(t_start, timeout_in)) &&
+		        (!psmi_cycles_left(t_grace_interval_start, t_grace_interval) ||
+                         !psmi_cycles_left(t_grace_start, t_grace_time)));
+	if (err == PSM_OK_NO_PROGRESS) {
+	    /* nothing happened in the interval so break out early */
+	    break;
+	}
+    }
+
+    t_grace_finish = get_cycles();
+
+    _IPATH_PRDBG("Closing endpoint disconnect left to=%d,from=%d after %d millisec of grace (out of %d)\n",
+	 	 proto->num_connected_to, proto->num_connected_from,
+		 (int) (cycles_to_nanosecs(t_grace_finish - t_grace_start) / MSEC_ULL),
+                 (int) (t_grace_time / MSEC_ULL));
     
     if ((err = ips_ibta_fini(proto)))
       goto fail;
@@ -886,11 +937,13 @@ _build_ctrl_message(struct ips_proto *proto,
 	tot_paywords += paylen >> 2;
 	p_hdr->lrh[2] = __cpu_to_be16(tot_paywords + SIZE_OF_CRC);
 
+#if 0	/* MARKDEBBAGE - disabled this as it slows down connect at scale */
 	/* On request message, always set the kpf flag.  If reply, only set it
 	 * if we know that the recvthread is running */
 	if (message_type == OPCODE_CONNECT_REQUEST || 
 	    ipsaddr->flags & SESS_FLAG_HAS_RCVTHREAD)
 		pkt_flags |= INFINIPATH_KPF_INTR;
+#endif
 	break;
 
     case OPCODE_DISCONNECT_REQUEST:

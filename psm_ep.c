@@ -685,6 +685,7 @@ __psm_ep_open(psm_uuid_t const unique_job_key, struct psm_ep_open_opts const *op
     ep->errh = psmi_errhandler_global; /* by default use the global one */
     ep->ptl_amsh.ep_poll = psmi_poll_noop;
     ep->ptl_ips.ep_poll  = psmi_poll_noop;
+    ep->connections = 0;
 
     /* See how many iterations we want to spin before yielding */
     psmi_getenv("PSM_YIELD_SPIN_COUNT",
@@ -811,20 +812,42 @@ __psm_ep_close(psm_ep_t ep, int mode, int64_t timeout_in)
 {
     psm_error_t err = PSM_OK;
     uint64_t t_start = get_cycles();
+    union psmi_envvar_val timeout_intval;
 
     PSMI_ERR_UNLESS_INITIALIZED(ep);
 
     PSMI_PLOCK();
 
+    if (psmi_opened_endpoint == NULL) {
+        err =  psmi_handle_error(NULL, PSM_EP_WAS_CLOSED,
+			         "PSM Endpoint is closed or does not exist");
+        return err;
+    }
+
     psmi_opened_endpoint = NULL;
 
-    /* The minimum should probably be chosen to be a function of the number of
-     * connected peers */
+    psmi_getenv("PSM_CLOSE_TIMEOUT",
+                "End-point close timeout over-ride.",
+                PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_UINT,
+                (union psmi_envvar_val) (int) (PSMI_MIN_EP_CLOSE_TIMEOUT / SEC_ULL),
+                &timeout_intval);
+
+    if (getenv("PSM_CLOSE_TIMEOUT")) {
+        timeout_in = timeout_intval.e_uint * SEC_ULL;
+    }
+    else {
+        /* The timeout parameter provides the minimum timeout. A heuristic
+	 * is used to scale up the timeout linearly with the number of 
+	 * endpoints, and we allow one second per 100 endpoints. */
+        timeout_in = max(timeout_in, (ep->connections * SEC_ULL) / 100);
+    }
+
     if (timeout_in < PSMI_MIN_EP_CLOSE_TIMEOUT)
 	timeout_in = PSMI_MIN_EP_CLOSE_TIMEOUT;
-    _IPATH_PRDBG("Closing endpoint %p with force=%s and to=%.2f seconds\n",
-		    ep, mode == PSM_EP_CLOSE_FORCE ? "YES" : "NO", 
-		    (double) timeout_in / 1e9);
+    _IPATH_PRDBG("Closing endpoint %p with force=%s and to=%.2f seconds and "
+                 "%d connections\n",
+		 ep, mode == PSM_EP_CLOSE_FORCE ? "YES" : "NO", 
+		 (double) timeout_in / 1e9, (int) ep->connections);
 
     /* XXX We currently cheat in the sense that we leave each PTL the allowed
      * timeout.  There's no good way to do this until we change the PTL

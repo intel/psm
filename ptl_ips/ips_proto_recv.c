@@ -999,7 +999,6 @@ ips_proto_process_unknown(const struct ips_recvhdrq_event *rcv_ev)
 	case OPCODE_DISCONNECT_REPLY:
 	    _process_connect(rcv_ev);
 	    return IPS_RECVHDRQ_CONTINUE;
-	    break;
 	case OPCODE_ERR_CHK_BAD: /* ignore, old opcode */
 	    return IPS_RECVHDRQ_CONTINUE;
 	default:

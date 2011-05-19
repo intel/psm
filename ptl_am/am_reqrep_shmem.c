@@ -1175,12 +1175,12 @@ amsh_ep_connreq_init(ptl_t *ptl,
             continue;
         if (op == PTL_OP_CONNECT) {
             epid = array_of_epid[i];
-            _IPATH_VDBG("looking at epid %llx\n", (unsigned long long) epid);
             if (!amsh_epid_reachable(ptl, epid)) {
                 array_of_errors[i] = PSM_EPID_UNREACHABLE;
                 array_of_epaddr[i] = NULL;
                 continue;
             }
+            _IPATH_VDBG("looking at epid %llx\n", (unsigned long long) epid);
             epaddr = psmi_epid_lookup(ptl->ep, epid);
             if (epaddr != NULL) {
                 if (epaddr->ptl != ptl) {

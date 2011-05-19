@@ -53,6 +53,7 @@ __psm_ep_connect(psm_ep_t ep, int num_of_epid,
     char *device;
     uint64_t t_start = get_cycles();
     uint64_t t_left;
+    union psmi_envvar_val timeout_intval;
 
     PSMI_ERR_UNLESS_INITIALIZED(ep);
 
@@ -93,8 +94,24 @@ __psm_ep_connect(psm_ep_t ep, int num_of_epid,
 	epid_mask_isdupof[j] = -1;
     }
 
-    _IPATH_VDBG("Connect to %d endpoints in %.2f secs\n",
-                num_toconnect, (double) timeout/ 1e9);
+    psmi_getenv("PSM_CONNECT_TIMEOUT",
+                "End-point connection timeout over-ride. 0 for no time-out.",
+                PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_UINT,
+                (union psmi_envvar_val) 0,
+                &timeout_intval);
+
+    if (getenv("PSM_CONNECT_TIMEOUT")) {
+        timeout = timeout_intval.e_uint * SEC_ULL;
+    }
+    else {
+        /* The timeout parameter provides the minimum timeout. A heuristic
+	 * is used to scale up the timeout linearly with the number of 
+	 * endpoints, and we allow one second per 100 endpoints. */
+        timeout = max(timeout, (num_toconnect * SEC_ULL) / 100);
+    }
+
+    _IPATH_PRDBG("Connect to %d endpoints with time-out of %.2f secs\n",
+                 num_toconnect, (double) timeout/ 1e9);
 
     /* Look for duplicates in input array */
     for (i = 0; i < num_of_epid; i++) {
@@ -162,6 +179,7 @@ __psm_ep_connect(psm_ep_t ep, int num_of_epid,
 
 	    if (array_of_errors[j] == PSM_OK) {
 		epid_mask[j] = 0; /* don't try on next ptl */
+		ep->connections++;
 	    }
 	}
     }
