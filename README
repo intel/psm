@@ -1,5 +1,5 @@
 
-  Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+  Copyright (c) 2006-2011. QLogic Corporation. All rights reserved.
   Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  
   This software is available to you under a choice of one of two
@@ -48,12 +48,15 @@ There are two mechanisms for building PSM:
   1. Use provided Makefiles to build and install
   2. Generate a tarball that can be used to build source and binary RPMs
 
+The instructions below use $PRODUCT and $RELEASE to refer to the product
+and release of the infinipath-psm RPM.
+
 Building from Makefiles
 -----------------------
 1. Untar the tarball:
-	$ tar zxvf InfiniPath-PSM.tar.gz
+	$ tar zxvf infinipath-psm-$PRODUCT-$RELEASE.tar.gz
 2. Change directory into the untarred location:
-	$ cd InfiniPath-PSM
+	$ cd infinipath-psm-$PRODUCT-$RELEASE
 3. Run make on the command line. This will build the libraries. By default,
    the Makefile will auto-detect whether libuuid and the uuid.h header file
    are installed. If so, it will use the system's libuuid. Otherwise, PSM
@@ -83,9 +86,9 @@ This is a two step process: Generate a PSM distribution tarball which can then
 be used to generate source and binary RPMs using the rpmbuild command with the
 -ta option.
 1. Untar the tarball:
-	$ tar zxvf InfiniPath-PSM.tar.gz
+	$ tar zxvf infinipath-psm-$PRODUCT-$RELEASE.tar.gz
 2. Change directory into the untarred location:
-	$ cd InfiniPath-PSM
+	$ cd infinipath-psm-$PRODUCT-$RELEASE
 3. Generate distribution tarball
    	$ make dist
    To force compiling with the included libuuid, use the USE_PSM_UUID variable:
@@ -95,7 +98,7 @@ builds to use the included libuuid i.e. If you are generating the distribution
 tarball on a RHEL machine but may use rpmbuild on a SuSE SLES machine. This
 minimized any cross distribution dependencies for the package.
 4. Generate source and binary packages
-   	$ rpmbuild -ta infinipath-psm-1.13.tar.gz
+   	$ rpmbuild -ta infinipath-psm-$PRODUCT-$RELEASE.tar.gz
    Please refere to the man page of rpmbuild for other options in generating
 RPMs. The generated RPMs are relocatable so one can provide the prefix option
 to retarget the installation location.

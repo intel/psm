@@ -1,11 +1,11 @@
 Summary: QLogic PSM Libraries
 Name: infinipath-psm
 Version: @VERSION@
-Release: 1
+Release: @RELEASE@
 License: GPL
 Group: System Environment/Libraries
 URL: http://www.qlogic.com/
-Source0: %{name}-%{version}.tar.gz
+Source0: %{name}-%{version}-%{release}.tar.gz
 Prefix: /usr
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
 Requires(post): /sbin/ldconfig
@@ -33,7 +33,7 @@ interfaces in parallel environments.
 Development files for the libpsm_infinipath library
 
 %prep
-%setup -q
+%setup -q -n infinipath-psm-%{version}-%{release}
 
 %build
 %{__make} @PSM_UUID@
