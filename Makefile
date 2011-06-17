@@ -95,16 +95,10 @@ MAJOR := $(PSM_LIB_MAJOR)
 MINOR := $(PSM_LIB_MINOR)
 
 # The desired version number comes from the most recent tag starting with "v"
-VERSION := $(shell git tag -l | grep "^v" | sed 's/^v//' | head -1)
-ifeq (${VERSION},)
-$(error VERSION is not specified - check git tags)
-endif
+VERSION := $(shell git tag -l 2> /dev/null | grep "^v" | sed 's/^v//' | head -1)
 
 # The desired release number comes from the most recent tag starting with "r"
-RELEASE := $(shell git tag -l | grep "^r" | sed 's/^r//' | head -1)
-ifeq (${RELEASE},)
-$(error RELEASE is not specified - check git tags)
-endif
+RELEASE := $(shell git tag -l 2> /dev/null | grep "^r" | sed 's/^r//' | head -1)
 
 # Concatenated version and release
 VERSION_RELEASE := $(VERSION)-$(RELEASE)
