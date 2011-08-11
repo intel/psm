@@ -421,10 +421,14 @@ ips_proto_init(const psmi_context_t *context, const ptl_t *ptl,
 	init_once = 1;
 	host_pid = (uint32_t) getpid();
 	host_ipv4addr = psmi_get_ipv4addr(); /* already be */
-	if (host_ipv4addr == 0 || host_ipv4addr == __cpu_to_be32(0x7f000001)) {
-	    _IPATH_INFO("%s, not fatal but some features may be disabled\n",
-		!host_ipv4addr ? "Error obtaining local IP address" :
-		"Localhost IP address is set to the loopback address 127.0.0.1");
+	if (host_ipv4addr == 0) {
+	    _IPATH_DBG("Unable to obtain local IP address, "
+                       "not fatal but some features may be disabled\n");
+	}
+	else if (host_ipv4addr == __cpu_to_be32(0x7f000001)) {
+	    _IPATH_INFO("Localhost IP address is set to the "
+		        "loopback address 127.0.0.1, "
+		        "not fatal but some features may be disabled\n");
 	}
 	else {
 	    p = (char *) inet_ntop(AF_INET, (const void *) &host_ipv4addr, 
