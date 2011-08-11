@@ -49,7 +49,7 @@ WERROR := -Werror
 INCLUDES := -I. -I$(top_srcdir)/include -I$(top_srcdir)/mpspawn -I$(top_srcdir)/include/$(os)-$(arch) 
 BASECFLAGS +=-Wall $(WERROR)
 ifneq (,${PSM_DEBUG})
-  BASECFLAGS += -O0 -g3 -DPSM_DEBUG -funit-at-a-time
+  BASECFLAGS += -O0 -g3 -DPSM_DEBUG -funit-at-a-time -Wp,-D_FORTIFY_SOURCE=2
 else
   BASECFLAGS += -O3 -g3 
 endif
