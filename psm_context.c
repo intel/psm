@@ -650,7 +650,7 @@ psmi_get_hca_selection_algorithm(void)
   else if (!strcasecmp(env_hca_alg.e_str, "Packed"))
     hca_alg = IPATH_PORT_ALG_WITHIN;
   else {
-    _IPATH_ERROR("Unknown HCA selection algorithm %s. Defaultng to Round Robin "
+    _IPATH_ERROR("Unknown HCA selection algorithm %s. Defaulting to Round Robin "
 		 "allocation of HCAs.\n", env_hca_alg.e_str);
     hca_alg = IPATH_PORT_ALG_ACROSS;
   }
