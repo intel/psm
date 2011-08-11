@@ -299,7 +299,7 @@ struct ipath_base_info {
  * may not be implemented; the user code must deal with this if it
  * cares, or it must abort after initialization reports the difference.
  */
-#define IPATH_USER_SWMINOR 11
+#define IPATH_USER_SWMINOR 12
 
 #define IPATH_USER_SWVERSION ((IPATH_USER_SWMAJOR<<16) | IPATH_USER_SWMINOR)
 

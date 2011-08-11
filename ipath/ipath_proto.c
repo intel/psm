@@ -167,9 +167,13 @@ struct _ipath_ctrl *ipath_userinit(int fd, struct ipath_user_info *u,
     struct stat st;
     struct ipath_cmd c;
     size_t usize;
+    uintptr_t pg_mask;
+    __u64 pioavailaddr;
+    uint64_t uregbase;
     
     /* First get the page size */
     __ipath_pg_sz = sysconf(_SC_PAGESIZE);
+    pg_mask = ~ (intptr_t) (__ipath_pg_sz - 1);
 
     u->spu_base_info_size = sizeof(*b);
     u->spu_base_info = (uint64_t)(uintptr_t) b;
@@ -278,6 +282,7 @@ struct _ipath_ctrl *ipath_userinit(int fd, struct ipath_user_info *u,
     
     // now mmap in the rcvhdrq, egr bufs, PIO buffers and user regs
     // _ipath_uregbase is the user regs; not offset as it is in the kernel
+    uregbase = b->spi_uregbase;
     if((tmp=mmap64(0, usize, PROT_WRITE | PROT_READ,
 	    MAP_SHARED | MAP_LOCKED, fd,
 	    (__off64_t)b->spi_uregbase)) == MAP_FAILED) {
@@ -392,6 +397,12 @@ struct _ipath_ctrl *ipath_userinit(int fd, struct ipath_user_info *u,
 
     if (b->spi_runtime_flags & IPATH_RUNTIME_NODMA_RTAIL)
       ; /* Don't mmap tail pointer if not using it. */
+    else if ((b->spi_rcvhdr_tailaddr & pg_mask) == (uregbase & pg_mask)) {
+	uintptr_t s;
+	s = b->spi_rcvhdr_tailaddr - (b->spi_rcvhdr_tailaddr & pg_mask);
+	b->spi_rcvhdr_tailaddr = b->spi_uregbase + s;
+	__ipath_rcvtail = (volatile uint32_t*)(uintptr_t)b->spi_rcvhdr_tailaddr;
+    }
     else if (!b->spi_rcvhdr_tailaddr) {
 	/* If tailaddr is NULL, use the ureg page (for context sharing) */
 	__ipath_rcvtail = (volatile uint32_t*)
@@ -432,6 +443,8 @@ struct _ipath_ctrl *ipath_userinit(int fd, struct ipath_user_info *u,
 	ipath_touch_mmap(tmp, b->spi_rcv_egrbuftotlen);
 	b->spi_rcv_egrbufs = (uint64_t)(uintptr_t)tmp;
     }
+
+    pioavailaddr = b->spi_pioavailaddr;
     if((tmp=mmap64(0, __ipath_pg_sz, PROT_READ, MAP_SHARED | MAP_LOCKED,
 	    fd, (__off64_t)b->spi_pioavailaddr)) == MAP_FAILED) {
 	_IPATH_INFO("mmap of pioavail registers (%llx) failed: %s\n",
@@ -439,25 +452,44 @@ struct _ipath_ctrl *ipath_userinit(int fd, struct ipath_user_info *u,
 	goto err;
     }
     else {
-	uintptr_t s;
 	volatile __le64 *pio;
-
 	_IPATH_MMDBG("mmap pioavail from kernel 0x%llx to %p\n",
 	    (long long)b->spi_pioavailaddr, tmp);
-	s = b->spi_status - b->spi_pioavailaddr;
-	b->spi_status = (uintptr_t)(tmp + s);
 	b->spi_pioavailaddr = (uintptr_t)tmp;
-	__ipath_spi_status = (__u64 volatile*)(uintptr_t)b->spi_status;
 	pio = (volatile __le64 *)(uintptr_t)b->spi_pioavailaddr;
-	_IPATH_DBG("chipstatus=0x%llx, pioindex=0x%x, piocnt=0x%x "
+	_IPATH_DBG("pioindex=0x%x, piocnt=0x%x "
 	    "pioavailregs 0x%llx, 0x%llx, 0x%llx, 0x%llx\n",
-	    (unsigned long long)*__ipath_spi_status,
 	    b->spi_pioindex, b->spi_piocnt,
 	    (unsigned long long)__le64_to_cpu(pio[0]),
 	    (unsigned long long)__le64_to_cpu(pio[1]),
 	    (unsigned long long)__le64_to_cpu(pio[2]),
 	    (unsigned long long)__le64_to_cpu(pio[3]));
     }
+
+    if ((b->spi_status & pg_mask) == (pioavailaddr & pg_mask)) {
+        /* spi_status and spi_pioavailaddr are in the same page */
+	uintptr_t s;
+	s = b->spi_status - pioavailaddr;
+	b->spi_status = (uintptr_t)(tmp + s);
+	__ipath_spi_status = (__u64 volatile*)(uintptr_t)b->spi_status;
+    }
+    else if((tmp=mmap64(0, __ipath_pg_sz, PROT_READ, MAP_SHARED | MAP_LOCKED,
+		 fd, (__off64_t)(b->spi_status & pg_mask))) == MAP_FAILED) {
+	_IPATH_INFO("mmap of spi_status (%llx) failed: %s\n",
+	    (long long)b->spi_status, strerror(errno));
+	goto err;
+    }
+    else {
+        /* spi_status and spi_pioavailaddr are in different pages */
+	uintptr_t s;
+	_IPATH_MMDBG("mmap spi_status from kernel 0x%llx to %p\n",
+	    (long long)b->spi_status, tmp);
+	s = b->spi_status - (b->spi_status & pg_mask);
+	b->spi_status = (uintptr_t)(tmp + s);
+	__ipath_spi_status = (__u64 volatile*)(uintptr_t)b->spi_status;
+    }
+    _IPATH_DBG("chipstatus=0x%llx\n",
+	       (unsigned long long)*__ipath_spi_status);
 
     if(u->spu_subcontext_cnt) {
 	unsigned num_subcontexts = u->spu_subcontext_cnt;
