@@ -53,8 +53,8 @@ int64_t kcopy_get(int fd, pid_t pid, const void *src, void *dst, int64_t n) {
 		.tag = KCOPY_GET_SYSCALL,
 		.pid = pid,
 		.n = n,
-		.src = (uint64_t) (intptr_t) src,
-		.dst = (uint64_t) (intptr_t) dst
+		.src = (uint64_t) (uintptr_t) src,
+		.dst = (uint64_t) (uintptr_t) dst
 	};
 	int ret;
 
@@ -72,8 +72,8 @@ int64_t kcopy_put(int fd, const void *src, pid_t pid, void *dst, int64_t n) {
 		.tag = KCOPY_PUT_SYSCALL,
 		.pid = pid,
 		.n = n,
-		.src = (uint64_t) (intptr_t) src,
-		.dst = (uint64_t) (intptr_t) dst
+		.src = (uint64_t) (uintptr_t) src,
+		.dst = (uint64_t) (uintptr_t) dst
 	};
 	int ret;
 
@@ -90,7 +90,7 @@ int kcopy_abi(int fd) {
 	int32_t abi;
 	struct kcopy_syscall e = {
 		.tag = KCOPY_ABI_SYSCALL,
-		.dst = (uint64_t) (intptr_t) &abi
+		.dst = (uint64_t) (uintptr_t) &abi
 	};
 	int ret;
 
