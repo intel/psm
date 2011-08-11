@@ -408,8 +408,13 @@ ips_proto_mq_isend(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 	scb = mq_alloc_pkts(proto, 1, 0, 0);
 
 	if (len < proto->iovec_thresh_eager) {
-	    pktlen = len <= 2*ipsaddr->epr.epr_piosize ?  len / 2
-			: min(len, ipsaddr->epr.epr_piosize);
+	    if (len <= 2 * ipsaddr->epr.epr_piosize) {
+		// split into 2 packets and round second down to dword multiple
+		pktlen = len - (((len >> 1) + 3) & ~0x3);
+	    }
+	    else {
+	        pktlen = min(len, ipsaddr->epr.epr_piosize);
+	    }
 	    proto_flags &= ~IPS_PROTO_FLAG_MQ_EAGER_SDMA;
 	}
 	else {
@@ -418,6 +423,7 @@ ips_proto_mq_isend(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 	  if (pktlen > ipsaddr->epr.epr_piosize)
 	    pktlen = 0;
 	}
+	psmi_assert(pktlen <= ipsaddr->epr.epr_piosize);
 	
 	ips_scb_epaddr(scb) = ipsaddr;
 	ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_CTRL;
@@ -533,8 +539,13 @@ ips_proto_mq_send(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 	struct ips_flow *flow;
 
 	if (len < proto->iovec_thresh_eager_blocking) {
-	    pktlen = len <= 2*ipsaddr->epr.epr_piosize ?  len / 2
-	                  : min(len, ipsaddr->epr.epr_piosize );
+	    if (len <= 2 * ipsaddr->epr.epr_piosize) {
+		// split into 2 packets and round second down to dword multiple
+		pktlen = len - (((len >> 1) + 3) & ~0x3);
+	    }
+	    else {
+	        pktlen = min(len, ipsaddr->epr.epr_piosize);
+	    }
 	    proto_flags &= ~IPS_PROTO_FLAG_MQ_EAGER_SDMA;
 	}
 	else {
@@ -542,8 +553,8 @@ ips_proto_mq_send(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 	    pktlen = PSMI_PAGESIZE - ((uintptr_t) buf & (PSMI_PAGESIZE-1));
 	    if (pktlen > ipsaddr->epr.epr_piosize)
 	      pktlen = 0;
-	    pktlen = ipsaddr->epr.epr_piosize;
 	}
+	psmi_assert(pktlen <= ipsaddr->epr.epr_piosize);
 	
 	scb = mq_alloc_pkts(proto, 1, pktlen, IPS_SCB_FLAG_ADD_BUFFER);
 		
