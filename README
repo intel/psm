@@ -40,8 +40,7 @@ features with this release.
 
 Building PSM
 ------------
-Building has only been tested on RHEL 5.3 though other linux distributions 
-should work as well. Build requires that GNU GCC compiler is installed on 
+Build requires that GNU GCC compiler is installed on 
 the machine doing the build. Root privileges are required to install the
 runtime libraries and development header files into standard system location.
 There are two mechanisms for building PSM:
@@ -49,7 +48,7 @@ There are two mechanisms for building PSM:
   2. Generate a tarball that can be used to build source and binary RPMs
 
 The instructions below use $PRODUCT and $RELEASE to refer to the product
-and release of the infinipath-psm RPM.
+and release identifiers of the infinipath-psm RPM.
 
 Building from Makefiles
 -----------------------
