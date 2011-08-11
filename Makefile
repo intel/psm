@@ -95,10 +95,10 @@ MAJOR := $(PSM_LIB_MAJOR)
 MINOR := $(PSM_LIB_MINOR)
 
 # The desired version number comes from the most recent tag starting with "v"
-VERSION := $(shell git tag -l 2> /dev/null | grep "^v" | sed 's/^v//' | head -1)
+VERSION := $(shell if [ -d .git ] ; then git tag -l 2> /dev/null | grep "^v" | sed 's/^v//' | head -1 ; else echo "version" ; fi)
 
 # The desired release number comes from the most recent tag starting with "r"
-RELEASE := $(shell git tag -l 2> /dev/null | grep "^r" | sed 's/^r//' | head -1)
+RELEASE := $(shell if [ -d .git ] ; then git tag -l 2> /dev/null | grep "^r" | sed 's/^r//' | head -1 ; else echo "release" ; fi)
 
 # Concatenated version and release
 VERSION_RELEASE := $(VERSION)-$(RELEASE)
@@ -182,7 +182,7 @@ dist: distclean specfile
 		mkdir -p ${RPM_NAME}-${VERSION_RELEASE}/$$dir; \
 		[ ! -d $$x ] && cp $$x ${RPM_NAME}-${VERSION_RELEASE}/$$dir; \
 	done
-	git log -n1 --pretty=format:%H > ${RPM_NAME}-${VERSION_RELEASE}/COMMIT
+	if [ -d .git ] ; then git log -n1 --pretty=format:%H > ${RPM_NAME}-${VERSION_RELEASE}/COMMIT ; fi
 	-tar czvf ${RPM_NAME}-${VERSION_RELEASE}.tar.gz ${RPM_NAME}-${VERSION_RELEASE} > /dev/null 2>&1
 	tar czvf ${RPM_NAME}-${VERSION_RELEASE}.tar.gz ${RPM_NAME}-${VERSION_RELEASE}
 	rm -rf ${RPM_NAME}-${VERSION_RELEASE}
