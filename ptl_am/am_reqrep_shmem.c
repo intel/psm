@@ -454,8 +454,10 @@ amsh_mmap_fault(int sig)
         "%s: Delete stale shared memory files in /dev/shm.\n",
         psmi_gethostname(), psmi_gethostname());
     amsh_atexit();
-    write(2, shm_errmsg, strlen(shm_errmsg)+1);
-    exit(1); /* XXX revisit this... there's probably a better way to exit */
+    if (write(2, shm_errmsg, strlen(shm_errmsg)+1) == -1)
+      exit(2);
+    else
+      exit(1); /* XXX revisit this... there's probably a better way to exit */
 }
 
 /**

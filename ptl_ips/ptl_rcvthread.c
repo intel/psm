@@ -153,8 +153,11 @@ ips_ptl_rcvthread_fini(ptl_t *ptl)
 	   On Linux just closing the pipe does not wake up the receive
 	   thread. 
 	*/
-	write(rcvc->pipefd[1], (const void*) &t_now, sizeof(uint64_t));
-	close(rcvc->pipefd[1]);
+	if (write(rcvc->pipefd[1], (const void*) &t_now,
+		  sizeof(uint64_t)) == -1 ||
+ 	    close(rcvc->pipefd[1]) == -1) {
+	  _IPATH_VDBG("unable to close pipe to receive thread cleanly\n");
+	}
 	pthread_join(rcvc->hdrq_threadid, NULL);
 	t_cancel_us = (double) cycles_to_nanosecs(get_cycles() - t_now) / 1e3;
 
