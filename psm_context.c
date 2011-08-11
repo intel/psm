@@ -551,15 +551,25 @@ psmi_get_num_contexts(int unit_id)
     if (psm_ep_num_devunits(&units) == PSM_OK) {
 	int64_t val;
 	if (unit_id == PSMI_UNIT_ID_ANY) {
-	    uint32_t u;
+	  uint32_t u, p;
 	    for (u = 0; u < units; u++) {
-
-		if (!ipath_sysfs_unit_read_s64(u, "nctxts", &val, 0))
-		    n += val;
+	        for (p = 1; p <= IPATH_MAX_PORT; p++)
+		    if (ipath_get_port_lid(u, p) != -1)
+		        break;
+		if (p != IPATH_MAX_PORT &&
+		    !ipath_sysfs_unit_read_s64(u, "nctxts", &val, 0))
+		    n += (uint32_t) val;
 	    }
 	}
-	else if (!ipath_sysfs_unit_read_s64(unit_id, "nctxts", &val, 0))
-	    n += (uint32_t) val;
+	else {
+	    uint32_t p;
+	    for (p = 1; p <= IPATH_MAX_PORT; p++)
+		if (ipath_get_port_lid(unit_id, p) != -1)
+	            break;
+	    if (p != IPATH_MAX_PORT &&
+		!ipath_sysfs_unit_read_s64(unit_id, "nctxts", &val, 0))
+	        n += (uint32_t) val;
+	}
     }
     return n;
 }
