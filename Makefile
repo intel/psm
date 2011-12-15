@@ -95,10 +95,10 @@ MAJOR := $(PSM_LIB_MAJOR)
 MINOR := $(PSM_LIB_MINOR)
 
 # The desired version number comes from the most recent tag starting with "v"
-VERSION := $(shell if [ -d .git ] ; then git tag -l 2> /dev/null | grep "^v" | sed 's/^v//' | head -1 ; else echo "version" ; fi)
+VERSION := $(shell if [ -d .git ] ; then git log --decorate | awk '/^commit.*tag:/ { if (match($$0, "tag: v[a-zA-Z0-9\._]+")) { print substr($$0,RSTART+6,RLENGTH-6); exit } }' 2> /dev/null ; else echo "version" ; fi)
 
 # The desired release number comes from the most recent tag starting with "r"
-RELEASE := $(shell if [ -d .git ] ; then git tag -l 2> /dev/null | grep "^r" | sed 's/^r//' | head -1 ; else echo "release" ; fi)
+RELEASE := $(shell if [ -d .git ] ; then git log --decorate | awk '/^commit.*tag:/ { if (match($$0, "tag: r[a-zA-Z0-9\._]+")) { print substr($$0,RSTART+6,RLENGTH-6); exit } }' 2> /dev/null ; else echo "release" ; fi)
 
 # Concatenated version and release
 VERSION_RELEASE := $(VERSION)-$(RELEASE)
