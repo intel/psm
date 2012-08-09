@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -307,12 +307,19 @@ struct ips_proto {
     int         sl2vl[16];
 
     /* CCA per port */
-    uint16_t *cct;
-    uint16_t  ccti_size;
-    uint16_t  ccti_increase;
-    uint16_t  ccti_limit;
-    uint16_t  ccti_timer; /* CCTI Timer in units of 1.024 usec */
-    uint64_t  ccti_timer_cycles; /* CCTI Timer in cycles */
+    uint16_t *cct; /* cct table */
+    uint16_t  ccti_size; /* ccti table size */
+    uint16_t  ccti_limit; /* should be <= size-1 */
+
+    uint16_t  ccti_portctrl; /* QP or SL CC */
+    uint16_t  ccti_ctrlmap; /* map for valid sl */
+    struct cace { /* CACongestionEntry */
+	uint8_t   ccti_increase; /* steps to increase */
+	//uint16_t  ccti_timer; /* CCTI Timer in units of 1.024 usec */
+	uint64_t  ccti_timer_cycles; /* coverted from us_2_cycles() */
+	uint8_t   ccti_threshold; /* threshod to make log */
+	uint8_t   ccti_min; /* min value for ccti */
+    } cace[16]; /* 16 service level */
 };
 
 /* 

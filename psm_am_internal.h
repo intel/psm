@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -34,6 +34,9 @@
 #ifndef _PSM_AM_INTERNAL_H
 #define _PSM_AM_INTERNAL_H
 
+#define PSMI_AM_MAX_ARGS     8
+#define PSMI_AM_NUM_HANDLERS 256	/* must be power of 2 */
+
 #define PSMI_AM_ARGS_DEFAULT psm_am_token_t token, psm_epaddr_t epaddr, \
                              psm_amarg_t *args,	int nargs, 		\
 			     void *src, uint32_t len
@@ -51,7 +54,7 @@ PSMI_ALWAYS_INLINE(
 psm_am_handler_fn_t
 psm_am_get_handler_function(psm_ep_t ep, psm_handler_t handler_idx))
 {
-    int hidx = handler_idx & (PSM_AM_NUM_HANDLERS-1);
+    int hidx = handler_idx & (PSMI_AM_NUM_HANDLERS-1);
     psm_am_handler_fn_t fn = (psm_am_handler_fn_t) ep->am_htable[hidx];
     psmi_assert_always(fn != NULL);
     return fn;

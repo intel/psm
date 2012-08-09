@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -106,7 +106,7 @@ ips_proto_init(const psmi_context_t *context, const ptl_t *ptl,
     const struct ipath_base_info *base_info = &context->base_info;
     static int init_once = 0;
     uint32_t protoexp_flags, cksum_sz = 0;
-    union psmi_envvar_val env_tid, env_cksum;
+    union psmi_envvar_val env_tid, env_cksum, env_mtu;
     psm_error_t err = PSM_OK;
 
     /*
@@ -155,6 +155,21 @@ ips_proto_init(const psmi_context_t *context, const ptl_t *ptl,
     /* Decrement checksum accounting AFTER lowering power of two */
     proto->epinfo.ep_mtu -= cksum_sz; 
     
+    /* See if user specifies a lower MTU to use */
+    if (!psmi_getenv("PSM_MTU", "MTU specified by user: 1-5,256-4096[4/2048]",
+		PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_INT,
+		(union psmi_envvar_val) -1,
+		&env_mtu)) {
+	if (env_mtu.e_int != 256 && env_mtu.e_int != 512
+	&& env_mtu.e_int != 1024 && env_mtu.e_int != 2048
+	&& env_mtu.e_int != 4096) {
+	   if (env_mtu.e_int < 1 || env_mtu.e_int > 5) env_mtu.e_int = 4;
+	   env_mtu.e_int = ibta_mtu_enum_to_int((enum ibta_mtu)env_mtu.e_int);
+	}
+	if (proto->epinfo.ep_mtu > env_mtu.e_int)
+		proto->epinfo.ep_mtu = env_mtu.e_int;
+    }
+
     proto->epinfo.ep_piosize = base_info->spi_piosize - 
 			       proto->epinfo.ep_hdrq_msg_size -
 			       CRC_SIZE_IN_BYTES - PCB_SIZE_IN_BYTES - cksum_sz;
@@ -1950,8 +1965,11 @@ ips_proto_timer_send_callback(struct psmi_timer *current_timer, uint64_t current
 
       /* Clear congestion flag and decrease injection rate */
       flow->flags &= ~IPS_FLOW_FLAG_CONGESTED;
-      if ((flow->path->epr_ccti + proto->ccti_increase) < proto->ccti_limit)
-	ips_cca_adjust_rate(flow->path, proto->ccti_increase);
+      if ((flow->path->epr_ccti +
+      proto->cace[flow->path->epr_sl].ccti_increase) <=
+      proto->ccti_limit)
+	ips_cca_adjust_rate(flow->path,
+		proto->cace[flow->path->epr_sl].ccti_increase);
     }
 
     flow->fn.xfer.flush(flow, NULL);    
@@ -1990,7 +2008,7 @@ ips_cca_adjust_rate(ips_path_rec_t *path_rec, int cct_increment)
     psmi_timer_request(proto->timerq,
 		       &path_rec->epr_timer_cca,
 		       get_cycles() + 
-		       proto->ccti_timer_cycles);
+		       proto->cace[path_rec->epr_sl].ccti_timer_cycles);
   }
   
   return PSM_OK;

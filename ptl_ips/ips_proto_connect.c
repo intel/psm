@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -384,7 +384,7 @@ ips_proto_build_connect_message(struct ips_proto *proto,
 	    req->features      = 
 		    __cpu_to_be16(psmi_ips_node_features(proto->ep));
 	    req->hdrq_msg_size = proto->epinfo.ep_hdrq_msg_size;
-	    req->mtu           = proto->epinfo.ep_mtu;
+	    req->mtu = ipsaddr->epr.epr_path[IPS_PATH_HIGH_PRIORITY][0]->epr_mtu;
 	    strncpy(req->hostname, psmi_gethostname(),
 		sizeof(req->hostname) - 1);
 	    req->hostname[sizeof(req->hostname) - 1] = '\0';

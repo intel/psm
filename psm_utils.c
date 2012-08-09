@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -174,6 +174,8 @@ psmi_epid_lookup(psm_ep_t ep, psm_epid_t epid)
 void *
 psmi_epid_remove(psm_ep_t ep, psm_epid_t epid)
 {
+    if (PSMI_EP_HOSTNAME != ep)
+	_IPATH_VDBG("remove of (%p,%" PRIx64 ")\n", ep, epid);
     return psmi_epid_lookup_inner(ep, epid, 1);
 }
 
@@ -185,6 +187,8 @@ psmi_epid_add(psm_ep_t ep, psm_epid_t epid, void *entry)
     struct psmi_epid_tabentry *e;
     psm_error_t err = PSM_OK;
 
+    if (PSMI_EP_HOSTNAME != ep)
+	_IPATH_VDBG("add of (%p,%" PRIx64 ") with entry %p\n", ep, epid, entry);
     pthread_mutex_lock(&psmi_epid_table.tablock);
     /* Leave this here, mostly for sanity and for the fact that the epid
      * table is currently not used in the critical path */
@@ -1225,7 +1229,7 @@ psmi_amopt_ctl(const void *am_obj, int optname,
       if (!get) /* Cannot set this option */
 	return psmi_handle_error(NULL, PSM_OPT_READONLY, 
 				 "Unable to set PSM_AM_OPT_FRAG_SZ. This is "
-				 "a eead only option.");
+				 "a read only option.");
       /* Sanity check length */
       if (*optlen < sizeof(uint32_t)) {
 	*optlen = sizeof(uint32_t);

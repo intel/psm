@@ -52,7 +52,6 @@ int64_t knem_get(int fd, int64_t cookie, const void *src, int64_t n);
  */
 int64_t knem_put(int fd, const void *src, int64_t n, int64_t cookie);
 
-
 /*
  * register a memory region for put/get
  */

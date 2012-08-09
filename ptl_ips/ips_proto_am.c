@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -39,7 +39,7 @@
 
 #define IPS_AMFLAG_ISTINY 1
 
-psm_am_handler_fn_t psmi_am_htable[PSM_AM_NUM_HANDLERS];
+psm_am_handler_fn_t psmi_am_htable[PSMI_AM_NUM_HANDLERS];
 
 struct ips_am_token { 
     struct psmi_am_token    tok;
@@ -214,7 +214,7 @@ ips_am_short_request(ptl_t *ptl, psm_epaddr_t epaddr,
     }
     else {
       PSMI_BLOCKUNTIL(ptl->ep,err,
-	   ((scb = ips_scbctrl_alloc_tiny(&proto_am->scbc_reply)) != NULL));
+	   ((scb = ips_scbctrl_alloc_tiny(proto_am->scbc_request)) != NULL));
     }
 
     psmi_assert_always(scb != NULL);

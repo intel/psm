@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -435,11 +435,11 @@ psmi_init_userinfo_params(int unit_id, int port,
 		struct ipath_user_info *user_info)
 {
     int shcontexts_enabled, rankid, nranks;
-    int avail_contexts = 0, max_contexts, ask_contexts;
+    int avail_contexts = 0, max_contexts, ask_contexts, ranks_per_context = 0;
     uint32_t job_key;
     uint16_t *jkp;
     psm_error_t err = PSM_OK;
-    union psmi_envvar_val env_maxctxt;
+    union psmi_envvar_val env_maxctxt, env_ranks_per_context;
 
     memset(user_info, 0, sizeof *user_info);
     user_info->spu_userversion = IPATH_USER_SWVERSION;
@@ -470,7 +470,7 @@ psmi_init_userinfo_params(int unit_id, int port,
 
     /* See if the user wants finer control over context assignments */
     if (!psmi_getenv("PSM_SHAREDCONTEXTS_MAX", 
-		    "Forced max contexts to share",
+		    "Maximum number of contexts for this PSM job",
 		    PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_INT,
 		    (union psmi_envvar_val) avail_contexts,
 		    &env_maxctxt)) {
@@ -479,6 +479,15 @@ psmi_init_userinfo_params(int unit_id, int port,
     }
     else
 	ask_contexts = max_contexts = avail_contexts;
+
+    if (!psmi_getenv("PSM_RANKS_PER_CONTEXT", 
+		    "Number of ranks per context",
+		    PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_INT,
+		    (union psmi_envvar_val) 1,
+		    &env_ranks_per_context)) {
+        ranks_per_context = max(env_ranks_per_context.e_int, 1);
+	ranks_per_context = min(ranks_per_context, INFINIPATH_MAX_SUBCONTEXT);
+    }
 
     /* 
      * See if we could get a valid local rank.  If not, pre-attach to the
@@ -510,6 +519,17 @@ psmi_init_userinfo_params(int unit_id, int port,
 	goto fail;
     }
 
+    if (ranks_per_context) {
+        int contexts = (nranks + ranks_per_context - 1) / ranks_per_context;
+	if (contexts > ask_contexts) {
+	    err = psmi_handle_error(NULL, PSM_EP_NO_DEVICE,
+		    "Incompatible settings for "
+		    "PSM_SHAREDCONTEXTS_MAX and PSM_RANKS_PER_CONTEXT");
+	    goto fail;
+	}
+	ask_contexts = contexts;
+    }
+
     user_info->spu_port = port; /* requested IB port if > 0 */
 
     /* "unique" id based on job key */
@@ -532,8 +552,10 @@ psmi_init_userinfo_params(int unit_id, int port,
     /* else spu_subcontext_cnt remains 0 and context sharing is disabled. */
 
     _IPATH_PRDBG("PSM_SHAREDCONTEXTS lrank=%d,ppn=%d,avail_contexts=%d,"
-		 "max_contexts=%d,ask_contexts=%d,id=%u,peers=%d,port=%d\n",
+		 "max_contexts=%d,ask_contexts=%d,"
+                 "ranks_per_context=%d,id=%u,peers=%d,port=%d\n",
 		 rankid, nranks, avail_contexts, max_contexts, ask_contexts, 
+		 ranks_per_context,
 		 (int) user_info->spu_subcontext_id,
 		 (int) user_info->spu_subcontext_cnt,
 		 (int) user_info->spu_port);
@@ -556,7 +578,7 @@ psmi_get_num_contexts(int unit_id)
 	        for (p = 1; p <= IPATH_MAX_PORT; p++)
 		    if (ipath_get_port_lid(u, p) != -1)
 		        break;
-		if (p != IPATH_MAX_PORT &&
+		if (p <= IPATH_MAX_PORT &&
 		    !ipath_sysfs_unit_read_s64(u, "nctxts", &val, 0))
 		    n += (uint32_t) val;
 	    }
@@ -566,7 +588,7 @@ psmi_get_num_contexts(int unit_id)
 	    for (p = 1; p <= IPATH_MAX_PORT; p++)
 		if (ipath_get_port_lid(unit_id, p) != -1)
 	            break;
-	    if (p != IPATH_MAX_PORT &&
+	    if (p <= IPATH_MAX_PORT &&
 		!ipath_sysfs_unit_read_s64(unit_id, "nctxts", &val, 0))
 	        n += (uint32_t) val;
 	}

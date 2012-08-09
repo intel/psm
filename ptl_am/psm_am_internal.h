@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -60,21 +60,37 @@ typedef struct psmi_handlertab {
  * Can change the rendezvous threshold based on usage of kcopy (or not)
  */
 #define PSMI_MQ_RV_THRESH_KCOPY	   16000
-#define PSMI_MQ_RV_THRESH_NO_KCOPY 16000
+
+/*
+ * Can change the rendezvous threshold based on usage of knem (or not)
+ */
+#define PSMI_MQ_RV_THRESH_KNEM      16000
+
+/* If no kernel assisted copy is available this is the rendezvous threshold */
+#define PSMI_MQ_RV_THRESH_NO_KASSIST 16000
 
 #define PSMI_AM_CONN_REQ    1
 #define PSMI_AM_CONN_REP    2
 #define PSMI_AM_DISC_REQ    3
 #define PSMI_AM_DISC_REP    4
 
-#define PSMI_KCOPY_MODE_OFF 0
-#define PSMI_KCOPY_MODE_GET 1
-#define PSMI_KCOPY_MODE_PUT 2
-#define PSMI_KCOPY_MODE_DEFAULT	PSMI_KCOPY_MODE_PUT
-#define PSMI_KCOPY_MODE_DEFAULT_STRING	"put"
+#define PSMI_KASSIST_OFF       0x0
+#define PSMI_KASSIST_KCOPY_GET 0x1
+#define PSMI_KASSIST_KCOPY_PUT 0x2
+#define PSMI_KASSIST_KNEM_GET  0x4
+#define PSMI_KASSIST_KNEM_PUT  0x8
 
-int psmi_kcopy_mode;
-int psmi_kcopy_fd;
+#define PSMI_KASSIST_KCOPY     0x3
+#define PSMI_KASSIST_KNEM      0xC
+#define PSMI_KASSIST_GET       0x5
+#define PSMI_KASSIST_PUT       0xA
+#define PSMI_KASSIST_MASK      0xF
+
+#define PSMI_KASSIST_MODE_DEFAULT PSMI_KASSIST_KNEM_PUT
+#define PSMI_KASSIST_MODE_DEFAULT_STRING  "knem-put"
+
+int psmi_kassist_mode;
+int psmi_kassist_fd;
 int psmi_epaddr_kcopy_pid(psm_epaddr_t epaddr);
 
 /*

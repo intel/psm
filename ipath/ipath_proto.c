@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -604,7 +604,25 @@ int ipath_get_num_units(void)
 int ipath_get_port_lid(uint16_t unit, uint16_t port)
 {
     int64_t val;
+    char *state;
     int ret;
+
+    ret = ipath_sysfs_port_read(unit, port, "phys_state", &state);
+    if (ret == -1) {
+	    if(errno == ENODEV)
+		    /* this is "normal" for port != 1, on single
+		     * port chips */
+		    _IPATH_VDBG("Failed to get phys_state for unit %u:%u: %s\n",
+			unit, port, strerror(errno));
+	    else
+		    _IPATH_DBG("Failed to get phys_state for unit %u:%u: %s\n",
+			unit, port, strerror(errno));
+    } else if (strncmp(state, "5: LinkUp", 9)) {
+	    _IPATH_DBG("!LinkUp for unit %u:%u\n", unit, port);
+	    ret = -1;
+    }
+    free(state);
+    if (ret == -1) return ret;
 
     ret = ipath_sysfs_port_read_s64(unit, port, "lid", &val, 0);
 
@@ -644,7 +662,6 @@ int ipath_get_port_lid(uint16_t unit, uint16_t port)
 
     return ret;
 }
-
 
 // Given the unit number, return an error, or the corresponding GID
 // For now, it's used only so the MPI code can determine its fabric ID.

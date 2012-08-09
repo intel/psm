@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -148,7 +148,7 @@ ips_writehdrq_append(struct ips_writehdrq *writeq,
 
     /* Copy the data if this is an eager packet */
     rcv_paylen = ips_recvhdrq_event_paylen(rcv_ev);
-    rcv_paylen += (rcv_ev->has_cksum ? 4 : 0);
+    rcv_paylen += (rcv_ev->has_cksum ? PSM_CRC_SIZE_IN_BYTES : 0);
     
     if (rcv_ev->ptype == RCVHQ_RCV_TYPE_EAGER && rcv_paylen > 0)
     {

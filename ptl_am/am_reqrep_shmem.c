@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -40,6 +40,15 @@
 #include "psm_mq_internal.h"
 #include "psm_am_internal.h"
 #include "kcopyrw.h"
+#include "knemrw.h"
+
+struct psm_am_max_sizes {
+    uint32_t   nargs;
+    uint32_t   request_short;
+    uint32_t   reply_short;
+    uint32_t   request_long;
+    uint32_t   reply_long;
+};
 
 /*
  * Shared memory Active Messages, implementation derived from
@@ -213,7 +222,7 @@ struct amsh_qdirectory {
     am_pkt_bulk_t  	*qrepFifoLong;
     am_pkt_bulk_t  	*qrepFifoHuge;
 
-    int			kcopy_pid;
+    int			kassist_pid;
 } __attribute__ ((aligned(8)));
 
 /* The first shared memory page is a control page to support each endpoint
@@ -231,10 +240,12 @@ struct am_ctl_dirpage {
 
     psm_epid_t      shmidx_map_epid[PTL_AMSH_MAX_LOCAL_PROCS];
     int		    kcopy_minor;
-    int		    kcopy_pids[PTL_AMSH_MAX_LOCAL_PROCS];
+    int		    kassist_pids[PTL_AMSH_MAX_LOCAL_PROCS];
 };
 
 #define AMSH_HAVE_KCOPY	0x01
+#define AMSH_HAVE_KNEM  0x02
+#define AMSH_HAVE_KASSIST 0x3
 
 /* List of context-specific shared variables */
 static struct amsh_qdirectory *amsh_qdir;
@@ -247,8 +258,8 @@ static int	 amsh_shmfd = -1;    /* context shared mmap fd */
 static int	 amsh_max_idx = -1;  /* max directory idx seen so far */
 static int       amsh_shmidx = -1;   /* last used shmidx */
 
-int psmi_kcopy_fd = -1; /* when using kcopy */
-int psmi_shm_mq_rv_thresh = PSMI_MQ_RV_THRESH_NO_KCOPY;
+int psmi_kassist_fd = -1; /* when using kassist */
+int psmi_shm_mq_rv_thresh = PSMI_MQ_RV_THRESH_NO_KASSIST;
 
 static am_pkt_short_t amsh_empty_shortpkt = { 0 };
 
@@ -352,11 +363,14 @@ static void process_packet(ptl_t *ptl, am_pkt_short_t *pkt, int isreq);
 static void amsh_conn_handler(void *toki, psm_amarg_t *args, int narg, 
                               void *buf, size_t len);
 
+/* Kassist helper functions */
+static const char * psmi_kassist_getmode(int mode);
+static int psmi_get_kassist_mode();
+
 /* Kcopy functionality */
 int psmi_epaddr_kcopy_pid(psm_epaddr_t epaddr);
 static int psmi_kcopy_find_minor(int *minor);
 static int psmi_kcopy_open_minor(int minor);
-static const char * psmi_kcopy_getmode(int mode);
 
 static inline void
 am_ctl_qhdr_init(volatile am_ctl_qhdr_t *q, int elem_cnt, int elem_sz)
@@ -435,9 +449,9 @@ amsh_atexit()
         shm_unlink(amsh_keyname);
     }
 
-    if (psmi_kcopy_fd != -1) {
-	close(psmi_kcopy_fd);
-	psmi_kcopy_fd = -1;
+    if (psmi_kassist_fd != -1) {
+	close(psmi_kassist_fd);
+	psmi_kassist_fd = -1;
     }
 
     return;
@@ -470,8 +484,7 @@ psmi_shm_attach(const psm_uuid_t uuid_key, int *shmidx_o)
 {
     int ismaster = 1;
     int i;
-    int use_kcopy;
-    union psmi_envvar_val env_kcopy;
+    int use_kcopy, use_kassist;
     int shmidx;
     int kcopy_minor = -1;
     char shmbuf[256];
@@ -515,25 +528,11 @@ psmi_shm_attach(const psm_uuid_t uuid_key, int *shmidx_o)
 	err = PSM_NO_MEMORY;
 	goto fail;
     }
-
-    if (!psmi_getenv("PSM_SHM_KCOPY", 
-		     "PSM Shared Memory use kcopy (put,get,none)",
-		     PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_STR,
-		     (union psmi_envvar_val) PSMI_KCOPY_MODE_DEFAULT_STRING,
-		     &env_kcopy))
-    {
-	char *s = env_kcopy.e_str;
-	if (strcasecmp(s, "put") == 0)
-	    psmi_kcopy_mode = PSMI_KCOPY_MODE_PUT;
-	else if (strcasecmp(s, "get") == 0)
-	    psmi_kcopy_mode = PSMI_KCOPY_MODE_GET;
-	else
-	    psmi_kcopy_mode = PSMI_KCOPY_MODE_OFF;
-    }
-    else
-	psmi_kcopy_mode = PSMI_KCOPY_MODE_DEFAULT;
-
-    use_kcopy = (psmi_kcopy_mode != PSMI_KCOPY_MODE_OFF);
+    
+    /* Get which kassist mode to use. */
+    psmi_kassist_mode = psmi_get_kassist_mode();
+    use_kassist = (psmi_kassist_mode != PSMI_KASSIST_OFF);
+    use_kcopy = (psmi_kassist_mode & PSMI_KASSIST_KCOPY);
 
     segsz = psmi_amsh_segsize(0); /* segsize with no procs attached yet */ 
     amsh_shmfd = shm_open(amsh_keyname, 
@@ -621,23 +620,31 @@ psmi_shm_attach(const psm_uuid_t uuid_key, int *shmidx_o)
 	amsh_dirpage->max_idx = -1;
 	for (i = 0; i < PTL_AMSH_MAX_LOCAL_PROCS; i++) {
 	    amsh_dirpage->shmidx_map_epid[i] = 0;
-	    amsh_dirpage->kcopy_pids[i] = 0;
+	    amsh_dirpage->kassist_pids[i] = 0;
 	}
-	if (use_kcopy)
-	    psmi_kcopy_fd = psmi_kcopy_find_minor(&kcopy_minor);
+	if (use_kassist) {
+	  if (use_kcopy) {
+	    psmi_kassist_fd = psmi_kcopy_find_minor(&kcopy_minor);
+	    if (psmi_kassist_fd >= 0) 
+	      amsh_dirpage->kcopy_minor = kcopy_minor;
+	    else
+	      amsh_dirpage->kcopy_minor = -1;
+	  }
+	  else {  /* Setup knem */
+	    psmi_assert_always(psmi_kassist_mode & PSMI_KASSIST_KNEM);
+	    
+	    psmi_kassist_fd = knem_open_device();
+	  }
+	  
+	}
 	else
-	    psmi_kcopy_fd = -1;
-
-	if (psmi_kcopy_fd >= 0) 
-	    amsh_dirpage->kcopy_minor = kcopy_minor;
-	else
-	    amsh_dirpage->kcopy_minor = -1;
+	  psmi_kassist_fd = -1;
 	ips_mb();
 	amsh_dirpage->is_init = 1;
 	_IPATH_PRDBG("Mapped and initalized shm object control page at %p,"
                     "size=%d, kcopy minor is %d (mode=%s)\n", mapptr, 
 		    (int) segsz, kcopy_minor, 
-		    psmi_kcopy_getmode(psmi_kcopy_mode));
+		    psmi_kassist_getmode(psmi_kassist_mode));
     }
     else {
 	volatile int *is_init = &amsh_dirpage->is_init;
@@ -646,7 +653,7 @@ psmi_shm_attach(const psm_uuid_t uuid_key, int *shmidx_o)
 	_IPATH_PRDBG("Slave synchronized object control page at "
 		     "%p, size=%d, kcopy minor is %d (mode=%s)\n", 
 		     mapptr, (int) segsz, kcopy_minor,
-		    psmi_kcopy_getmode(psmi_kcopy_mode));
+		    psmi_kassist_getmode(psmi_kassist_mode));
     }
 
     /* 
@@ -662,25 +669,51 @@ psmi_shm_attach(const psm_uuid_t uuid_key, int *shmidx_o)
 	if (amsh_dirpage->shmidx_map_epid[i] == 0) {
 	    amsh_dirpage->shmidx_map_epid[i] = 1;
             amsh_dirpage->psm_verno[i] = PSMI_VERNO;
-	    amsh_dirpage->kcopy_pids[i] = (int) getpid();
-	    if (kcopy_minor == -1 && use_kcopy) {
+	    amsh_dirpage->kassist_pids[i] = (int) getpid();
+	    if (use_kassist) {
+	      if (!use_kcopy) {
+		if (!ismaster)
+		  psmi_kassist_fd = knem_open_device();
+		
+		/* If we are able to use KNEM assume everyone else on the
+		 * node can also use it. Advertise that KNEM is active via
+		 * the feature flag.
+		 */
+		if (psmi_kassist_fd >= 0) {
+		  amsh_dirpage->amsh_features[i] |= AMSH_HAVE_KNEM;
+		  psmi_shm_mq_rv_thresh = PSMI_MQ_RV_THRESH_KNEM;
+		}
+		else {
+		  psmi_kassist_mode = PSMI_KASSIST_OFF;
+		  use_kassist = 0;
+		  psmi_shm_mq_rv_thresh = PSMI_MQ_RV_THRESH_NO_KASSIST;
+		}
+	      }
+	      else {
+		psmi_assert_always(use_kcopy);
 		kcopy_minor = amsh_dirpage->kcopy_minor;
-		if (!ismaster && kcopy_minor >= 0)
-		    psmi_kcopy_fd = psmi_kcopy_open_minor(kcopy_minor);
-	    }
-
-	    /* If we're able to use kcopy, assume everyone on this node will be
-	     * able to use kcopy and set the mq threshold to with-kcopy.
-	     * Also advertise that we have kcopy in the shared features var.
-	     */
-	    if (kcopy_minor >= 0 && psmi_kcopy_fd >= 0 && 
-		kcopy_abi(psmi_kcopy_fd) != -1) 
-	    {
-		amsh_dirpage->amsh_features[i] |= AMSH_HAVE_KCOPY;
-		psmi_shm_mq_rv_thresh = PSMI_MQ_RV_THRESH_KCOPY;
+		if (!ismaster && kcopy_minor >= 0) 
+		  psmi_kassist_fd = psmi_kcopy_open_minor(kcopy_minor);
+		
+		/* If we are able to use KCOPY assume everyone else on the
+		 * node can also use it. Advertise that KCOPY is active via
+		 * the feature flag.
+		 */
+		if (psmi_kassist_fd >= 0) {
+		  amsh_dirpage->amsh_features[i] |= AMSH_HAVE_KCOPY;
+		  psmi_shm_mq_rv_thresh = PSMI_MQ_RV_THRESH_KCOPY;
+		}
+		else {
+		  psmi_kassist_mode = PSMI_KASSIST_OFF;
+		  use_kassist = 0; use_kcopy = 0;
+		  psmi_shm_mq_rv_thresh = PSMI_MQ_RV_THRESH_NO_KASSIST;
+		}
+	      }
 	    }
 	    else
-		psmi_shm_mq_rv_thresh = PSMI_MQ_RV_THRESH_NO_KCOPY;
+	      psmi_shm_mq_rv_thresh = PSMI_MQ_RV_THRESH_NO_KASSIST;
+	    _IPATH_PRDBG("KASSIST MODE: %s\n", psmi_kassist_getmode(psmi_kassist_mode));
+	    
             amsh_shmidx = shmidx = *shmidx_o = i;
             _IPATH_PRDBG("Grabbed shmidx %d\n", shmidx);
             amsh_dirpage->num_attached++;
@@ -839,9 +872,9 @@ psmi_shm_detach()
     psmi_free(amsh_keyname);
     amsh_keyname = NULL;
 
-    if (psmi_kcopy_fd != -1) {
-	close(psmi_kcopy_fd);
-	psmi_kcopy_fd = -1;
+    if (psmi_kassist_fd != -1) {
+	close(psmi_kassist_fd);
+	psmi_kassist_fd = -1;
     }
 
     /* go mark my shmidx as free */
@@ -950,10 +983,10 @@ am_update_directory(ptl_t *ptl, int shmidx)
     base_this = amsh_blockbase + am_ctl_sizeof_block() * shmidx + 
                 AMSH_BLOCK_HEADER_SIZE;
 
-    if (amsh_dirpage->amsh_features[shmidx] & AMSH_HAVE_KCOPY)
-	amsh_qdir[shmidx].kcopy_pid = amsh_dirpage->kcopy_pids[shmidx];
+    if (amsh_dirpage->amsh_features[shmidx] & AMSH_HAVE_KASSIST) 
+	amsh_qdir[shmidx].kassist_pid = amsh_dirpage->kassist_pids[shmidx];
     else
-	amsh_qdir[shmidx].kcopy_pid = 0;
+	amsh_qdir[shmidx].kassist_pid = 0;
 
     /* Request queues */
     amsh_qdir[shmidx].qreqH = (am_ctl_blockhdr_t *) base_this;
@@ -2216,7 +2249,7 @@ psm_error_t
 amsh_mq_rndv(ptl_t *ptl, psm_mq_t mq, psm_mq_req_t req,
              psm_epaddr_t epaddr, uint64_t tag, const void *buf, uint32_t len)
 {
-    psm_amarg_t args[4];
+    psm_amarg_t args[5];
     psm_error_t err = PSM_OK;
 
     args[0].u32w0 = MQ_MSG_RTS;
@@ -2224,7 +2257,12 @@ amsh_mq_rndv(ptl_t *ptl, psm_mq_t mq, psm_mq_req_t req,
     args[1].u64w0 = tag;
     args[2].u64w0 = (uint64_t)(uintptr_t) req;
     args[3].u64w0 = (uint64_t)(uintptr_t) buf;
-
+    /* If KNEM Get is active register region for peer to get from */
+    if (psmi_kassist_mode == PSMI_KASSIST_KNEM_GET) 
+      args[4].u64w0 = knem_register_region((void*) buf, len, PSMI_FALSE);
+    else
+      args[4].u64w0 = 0; 
+    
     psmi_assert(req != NULL);
     req->type = MQE_TYPE_SEND;
     req->buf  = (void *) buf;
@@ -2232,7 +2270,7 @@ amsh_mq_rndv(ptl_t *ptl, psm_mq_t mq, psm_mq_req_t req,
     req->send_msglen = len;
     req->send_msgoff = 0;
 
-    psmi_amsh_short_request(ptl, epaddr, mq_handler_hidx, args, 4, NULL, 0, 0);
+    psmi_amsh_short_request(ptl, epaddr, mq_handler_hidx, args, 5, NULL, 0, 0);
 
     return err;
 }
@@ -2356,7 +2394,7 @@ int
 psmi_epaddr_kcopy_pid(psm_epaddr_t epaddr)
 {
     int shmidx = epaddr->_shmidx;
-    return amsh_qdir[shmidx].kcopy_pid;
+    return amsh_qdir[shmidx].kassist_pid;
 }
 
 static
@@ -2407,18 +2445,92 @@ psmi_kcopy_open_minor(int minor)
 
 static
 const char *
-psmi_kcopy_getmode(int mode)
+psmi_kassist_getmode(int mode)
 {
     switch (mode) {
-	case PSMI_KCOPY_MODE_OFF:
-	    return "off";
-	case PSMI_KCOPY_MODE_PUT:
-	    return "put";
-	case PSMI_KCOPY_MODE_GET:
-	    return "get";
+        case PSMI_KASSIST_OFF:
+	    return "kassist off";
+	case PSMI_KASSIST_KCOPY_PUT:
+	    return "kcopy put";
+	case PSMI_KASSIST_KCOPY_GET:
+	    return "kcopy get";
+        case PSMI_KASSIST_KNEM_GET:
+	    return "knem get";
+        case PSMI_KASSIST_KNEM_PUT:
+	    return "knem put";
 	default:
 	    return "unknown";
     }
+}
+
+static
+int
+psmi_get_kassist_mode()
+{
+  int mode = PSMI_KASSIST_MODE_DEFAULT;
+  union psmi_envvar_val env_kassist;
+
+  /* Preserve backward compatibility */
+  if (!psmi_getenv("PSM_SHM_KCOPY", 
+		   "PSM Shared Memory use kcopy (put,get,none)",
+		   PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_STR,
+		   (union psmi_envvar_val) "put",
+		   &env_kassist))
+    {
+      char *s = env_kassist.e_str;
+      if (strcasecmp(s, "put") == 0)
+	mode = PSMI_KASSIST_KCOPY_PUT;
+      else if (strcasecmp(s, "get") == 0)
+	mode = PSMI_KASSIST_KCOPY_PUT;
+      else
+	mode = PSMI_KASSIST_OFF;
+    }
+  else if(!psmi_getenv("PSM_KASSIST_MODE",
+		       "PSM Shared memory kernel assist mode "
+		       "(knem-put, knem-get, kcopy-put, kcopy-get, none)",
+		       PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_STR,
+		       (union psmi_envvar_val) PSMI_KASSIST_MODE_DEFAULT_STRING,
+		       &env_kassist)) 
+    {
+      char *s = env_kassist.e_str;
+      if (strcasecmp(s, "kcopy-put") == 0)
+	mode = PSMI_KASSIST_KCOPY_PUT;
+      else if (strcasecmp(s, "kcopy-get") == 0)
+	mode = PSMI_KASSIST_KCOPY_GET;
+      else if (strcasecmp(s, "knem-put") == 0)
+	mode = PSMI_KASSIST_KNEM_PUT;
+      else if (strcasecmp(s, "knem-get") == 0)
+	mode = PSMI_KASSIST_KNEM_GET;
+      else
+	mode = PSMI_KASSIST_OFF;
+
+#if !defined(PSM_USE_KNEM)
+      if (mode & PSMI_KASSIST_KNEM) {
+      	_IPATH_ERROR("KNEM kassist mode requested which has not been compiled "
+		     "into this version of PSM. Switching kassist mode off.\n");
+      	mode = PSMI_KASSIST_OFF;
+      }
+#endif
+    }
+  else {
+    
+#if defined(PSM_USE_KNEM)   
+    int res;
+    
+    /* KNEM is the preferred access mechanism if available. Else default to
+     * using KCOPY.
+     */
+    res = access(KNEM_DEVICE_FILENAME, R_OK | W_OK);
+    if (res == 0)
+      mode = PSMI_KASSIST_KNEM_PUT;
+    else 
+      mode = PSMI_KASSIST_KCOPY_PUT;
+#else
+    mode = PSMI_KASSIST_KCOPY_PUT;
+#endif
+  }
+
+  return mode;
 }
 
 /* Connection handling for shared memory AM.

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -235,9 +235,13 @@ ips_mq_send_payload(ptl_t *ptl, ips_epaddr_t *ipsaddr, psmi_egrid_t egrid,
 
 	    if (flags & IPS_PROTO_FLAG_MQ_EAGER_SDMA) 
 	      ips_scb_flags(scb) |= IPS_SEND_FLAG_WAIT_SDMA;
-	    else {
-	      err = flow->fn.xfer.flush(flow, NULL);
-	      err = ips_recv_progress_if_busy(ptl, err);
+
+	    /* if not sdma, or sdma but running out of scb,
+	     * we need to flush the pending queue */
+	    if (!(flags & IPS_PROTO_FLAG_MQ_EAGER_SDMA) ||
+	    !ips_scbctrl_avail(scb->scbc)) {
+	        err = flow->fn.xfer.flush(flow, NULL);
+	        err = ips_recv_progress_if_busy(ipsaddr->ptl, err);
 	    }
 	} while (curscb != NULL);
 

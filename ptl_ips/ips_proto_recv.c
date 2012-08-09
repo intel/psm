@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -516,8 +516,11 @@ ips_proto_process_ack(struct ips_recvhdrq_event *rcv_ev)
     
     /* CCA: If flow is congested adjust rate */
     if_pf (rcv_ev->is_congested & IPS_RECV_EVENT_BECN) {
-      if ((flow->path->epr_ccti + proto->ccti_increase) < proto->ccti_limit) {
-	ips_cca_adjust_rate(flow->path, proto->ccti_increase);
+      if ((flow->path->epr_ccti +
+      proto->cace[flow->path->epr_sl].ccti_increase) <=
+      proto->ccti_limit) {
+	ips_cca_adjust_rate(flow->path,
+		proto->cace[flow->path->epr_sl].ccti_increase);
 	/* Clear congestion event */
 	rcv_ev->is_congested &= ~IPS_RECV_EVENT_BECN;
       }
@@ -1410,9 +1413,11 @@ ips_proto_process_packet_inner(struct ips_recvhdrq_event *rcv_ev)
 		psmi_assert_always(protocol == PSM_PROTOCOL_GO_BACK_N);
 		flow = &ipsaddr->flows[flowid];
 		
-	        if ((flow->path->epr_ccti + proto->ccti_increase) < 
-		    proto->ccti_limit) {
-		  ips_cca_adjust_rate(flow->path, proto->ccti_increase);
+	        if ((flow->path->epr_ccti +
+		proto->cace[flow->path->epr_sl].ccti_increase) <=
+		proto->ccti_limit) {
+		  ips_cca_adjust_rate(flow->path,
+			proto->cace[flow->path->epr_sl].ccti_increase);
 		  /* Clear congestion event */
 		  rcv_ev->is_congested &= ~IPS_RECV_EVENT_BECN;
 		}

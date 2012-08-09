@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -523,8 +523,7 @@ ips_recvhdrq_progress(struct ips_recvhdrq *recvq)
 
 	dest_subcontext  = _get_proto_subcontext(rcv_ev.p_hdr);
 
-	if_pf ((recvq->runtime_flags & IPATH_RUNTIME_RCHK) &&
-	       (_check_headers(&rcv_ev)))
+	if_pf (_check_headers(&rcv_ev))
 	  goto skip_packet;
 
         if_pf (rcv_ev.error_flags || 

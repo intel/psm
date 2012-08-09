@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -31,6 +31,9 @@
  * SOFTWARE.
  */
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 #include "psm_user.h"
 #include "ipserror.h"
 #include "ips_proto.h"
@@ -69,7 +72,7 @@ ips_gen_ipd_table(struct ips_proto *proto)
 }
 
 static psm_error_t
-ips_gen_cct_table(struct ips_proto *proto, uint32_t numEntries, uint32_t max_ipd_us)
+ips_gen_cct_table(struct ips_proto *proto)
 {
   psm_error_t err = PSM_OK;
   uint32_t cca_divisor, ipdidx, ipdval = 1;
@@ -79,14 +82,9 @@ ips_gen_cct_table(struct ips_proto *proto, uint32_t numEntries, uint32_t max_ipd
   if (proto->cct)
     goto fail;
 
-  /* For now the CCT limit is same as table size. This does not have to be the
-   * case.
-   */
-  proto->ccti_size = numEntries;
-  proto->ccti_limit = proto->ccti_size;
-  
   /* Allocate the CCT table */
-  cct_table = psmi_calloc(proto->ep, UNDEFINED, numEntries+1, sizeof(uint16_t));
+  cct_table = psmi_calloc(proto->ep, UNDEFINED,
+		proto->ccti_size, sizeof(uint16_t));
   if (!cct_table) {
     err = PSM_NO_MEMORY;
     goto fail;
@@ -98,6 +96,7 @@ ips_gen_cct_table(struct ips_proto *proto, uint32_t numEntries, uint32_t max_ipd
   /* Generate the remaining CCT table entries */
   for (ipdidx = 1; ipdidx < proto->ccti_size; ipdidx += 4,ipdval++)
     for (cca_divisor = 0; cca_divisor < 4; cca_divisor++) {
+      if ((ipdidx+cca_divisor) == proto->ccti_size) break;
       cct_table[ipdidx+cca_divisor] = 
 	(((cca_divisor ^ 0x3) << CCA_DIVISOR_SHIFT) | (ipdval & 0x3FFF));
       _IPATH_VDBG("CCT[%d] = %x. Divisor: %x, IPD: %x\n", ipdidx+cca_divisor, cct_table[ipdidx+cca_divisor], (cct_table[ipdidx+cca_divisor] >> CCA_DIVISOR_SHIFT), cct_table[ipdidx+cca_divisor] & CCA_IPD_MASK);
@@ -202,8 +201,15 @@ ips_none_get_path_rec(struct ips_proto *proto,
       ips_ipd_delay[path_rec->epr_static_rate];
 
     /* Setup CCA parameters for path */
+    if (path_rec->epr_sl > 15) {
+	return PSM_INTERNAL_ERR;
+    }
+    if (!(proto->ccti_ctrlmap&(1<<path_rec->epr_sl))) {
+	_IPATH_CCADBG("No CCA for sl %d, disable CCA\n", path_rec->epr_sl);
+	proto->flags &= ~IPS_PROTO_FLAG_CCA;
+    }
     path_rec->proto = proto;
-    path_rec->epr_ccti_min = 0;
+    path_rec->epr_ccti_min = proto->cace[path_rec->epr_sl].ccti_min;
     path_rec->epr_ccti = path_rec->epr_ccti_min;
     psmi_timer_entry_init(&path_rec->epr_timer_cca,
 			  ips_cca_timer_callback, path_rec);
@@ -421,7 +427,6 @@ psm_error_t ips_ibta_link_updown_event(struct ips_proto *proto)
 {
   psm_error_t err = PSM_OK;
   int ret;
-  uint32_t max_delay_us;
 
   /* Get base lid, lmc and rate as these may have changed if the link bounced */
   proto->epinfo.ep_base_lid       = 
@@ -454,12 +459,8 @@ psm_error_t ips_ibta_link_updown_event(struct ips_proto *proto)
   /* Regenerate new IPD table for the updated link rate. */
   ips_gen_ipd_table(proto);
   
-  /* Setup CCA parameters for port */
-  proto->ccti_timer_cycles = us_2_cycles(proto->ccti_timer);
-  
   /* Generate the CCT table.  */
-  max_delay_us = DF_CCT_MAX_IPD_DELAY_US;
-  err = ips_gen_cct_table(proto, proto->ccti_size, max_delay_us);
+  err = ips_gen_cct_table(proto);
 
  fail:
   return err;
@@ -511,31 +512,143 @@ psm_error_t ips_ibta_init(struct ips_proto *proto)
     union psmi_envvar_val ccti_incr;
     union psmi_envvar_val ccti_timer;
     union psmi_envvar_val ccti_size;
+    int i, fd;
+    char ccabuf[256];
+    uint8_t *p;
 
+/*
+ * If user set any environment variable, use self CCA.
+ */
+    if (getenv("PSM_CCTI_INCREMENT") || getenv("PSM_CCTI_TIMER") || getenv("PSM_CCTI_TABLE_SIZE")) {
+	goto selfcca;
+    }
+
+/*
+ * Check qib driver CCA setting, and try to use it if available.
+ * Fall to self CCA setting if errors.
+ */
+    sprintf(ccabuf,
+	"/sys/class/infiniband/qib%d/ports/%d/CCMgtA/cc_settings_bin",
+	proto->ep->context.base_info.spi_unit,
+	proto->ep->context.base_info.spi_port);
+    fd = open(ccabuf, O_RDONLY);
+    if (fd < 0) {
+	goto selfcca;
+    }
+    /* (16+16+640)/8=84 */
+    if (read(fd, ccabuf, 84) != 84) {
+	_IPATH_CCADBG("Read cc_settings_bin failed. using static CCA\n");
+	close(fd);
+	goto selfcca;
+    }
+    p = (uint8_t *)ccabuf;
+    memcpy(&proto->ccti_portctrl, p, 2); p += 2;
+    memcpy(&proto->ccti_ctrlmap, p, 2); p += 2;
+    for (i=0; i<16; i++) {
+	proto->cace[i].ccti_increase = *p; p++;
+	memcpy(&proto->cace[i].ccti_timer_cycles, p, 2); p += 2;
+	proto->cace[i].ccti_timer_cycles =
+	    us_2_cycles(proto->cace[i].ccti_timer_cycles);
+	proto->cace[i].ccti_threshold = *p; p++;
+	proto->cace[i].ccti_min = *p; p++;
+    }
+    close(fd);
+
+    sprintf(ccabuf,
+	"/sys/class/infiniband/qib%d/ports/%d/CCMgtA/cc_table_bin",
+	proto->ep->context.base_info.spi_unit,
+	proto->ep->context.base_info.spi_port);
+    fd = open(ccabuf, O_RDONLY);
+    if (fd < 0) {
+	_IPATH_CCADBG("Open cc_table_bin failed. using static CCA\n");
+	goto selfcca;
+    }
+    if ((i = read(fd, &proto->ccti_limit, 2)) != 2) {
+	_IPATH_CCADBG("Read ccti_limit failed. using static CCA\n");
+	close(fd);
+	goto selfcca;
+    }
+    if (proto->ccti_limit < 63) {
+	_IPATH_CCADBG("Read ccti_limit %d less than 63. "
+	    "using static CCA\n", proto->ccti_limit);
+	close(fd);
+	goto selfcca;
+    }
+    proto->cct = psmi_calloc(proto->ep, UNDEFINED,
+	proto->ccti_limit+1, sizeof(uint16_t));
+    if (!proto->cct) {
+	close(fd);
+	err = PSM_NO_MEMORY;
+	goto fail;
+    }
+    i = (proto->ccti_limit+1)*sizeof(uint16_t);
+    if (read(fd, proto->cct, i) != i) {
+	_IPATH_CCADBG("Read ccti_entry_list, using static CCA\n");
+	psmi_free(proto->cct);
+	proto->cct = NULL;
+	close(fd);
+	goto selfcca;
+    }
+    close(fd);
+    proto->ccti_size = proto->ccti_limit + 1;
+    goto finishcca;
+
+/*
+ * Since there is no qib driver CCA settings, use self built CCA.
+ */
+    selfcca:
     psmi_getenv("PSM_CCTI_INCREMENT",
-		"IBTA_CCA: Index increment for CCT table on receipt of a BECN packet (default 4)",
+		"IBTA_CCA: Index increment for CCT table on receipt of a BECN packet (less than table size, default 1)",
 		PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_UINT_FLAGS,
-		(union psmi_envvar_val) 4,
+		(union psmi_envvar_val) 1,
 		&ccti_incr);
     
     psmi_getenv("PSM_CCTI_TIMER",
-		"IBTA_CCA: CCT table congestion timer (default 16 us)",
+		"IBTA_CCA: CCT table congestion timer (>0, default 1 us)",
 		PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_UINT_FLAGS,
-		(union psmi_envvar_val) 16,
+		(union psmi_envvar_val) 1,
 		&ccti_timer);
-    
+ 
     psmi_getenv("PSM_CCTI_TABLE_SIZE",
-		"IBTA_CCA: Number of entries in CCT table (default 128)",
+		"IBTA_CCA: Number of entries in CCT table (multiple of 64, default 128)",
 		PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_UINT_FLAGS,
-		(union psmi_envvar_val) DF_CCT_TABLE_SIZE,
+		(union psmi_envvar_val) DF_CCT_TABLE_SIZE, //128
 		&ccti_size);
 
-    /* Setup CCA parameters for port */
-    proto->ccti_increase = ccti_incr.e_uint; 
-    proto->ccti_timer = ccti_timer.e_uint; 
+    /* Check the invalid values. */
+    if (ccti_size.e_uint < 64 || ccti_size.e_uint%64) {
+        _IPATH_INFO("Invalid PSM_CCTI_TABLE_SIZE=%d, at least 64 and multiple of 64, setting to default 128\n",
+                ccti_size.e_uint);
+        ccti_size.e_uint = 128;
+    }
     proto->ccti_size = ccti_size.e_uint;
+    /* For now the CCT limit is same as table size.
+     * This does not have to be the case. */
+    proto->ccti_limit = proto->ccti_size - 1;
+
+    if (ccti_timer.e_uint <= 0) {
+        _IPATH_INFO("Invalid PSM_CCTI_TIMER=%d, should be bigger than 0, setting to default 1\n",
+                ccti_timer.e_uint);
+        ccti_timer.e_uint = 1;
+    }
+    if (ccti_incr.e_uint <= 0 || ccti_incr.e_uint >= ccti_size.e_uint) {
+        _IPATH_INFO("Invalid PSM_CCTI_INCREMENT=%d, should be less than table size, setting to default 1\n",
+                ccti_incr.e_uint);
+        ccti_incr.e_uint = 1;
+    }
+
+    /* Setup CCA parameters for port */
+    proto->ccti_portctrl = 1;	/* SL/Port based congestion control */
+    proto->ccti_ctrlmap = 0xFFFF;
+    for (i=0; i<16; i++) {
+	proto->cace[i].ccti_increase = ccti_incr.e_uint; 
+	proto->cace[i].ccti_timer_cycles = us_2_cycles(ccti_timer.e_uint); 
+	proto->cace[i].ccti_threshold = 8;
+	proto->cace[i].ccti_min = 0;
+    }
   }
-  
+
+  finishcca:
   /* Seed the random number generator with our pid */
   srand(getpid());
 

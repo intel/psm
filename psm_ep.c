@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -40,7 +40,6 @@
 #include "psm_user.h"
 #include "psm_mq_internal.h"
 #include "psm_am_internal.h"
-#include "psm_noship.h"
 
 /*
  * Endpoint management
@@ -121,22 +120,10 @@ psmi_ep_devlids(uint16_t **lids, uint32_t *num_lids_o,
 		    int lid = ipath_get_port_lid(i, j);
 		    int ret;
 		    uint64_t gid_hi = 0, gid_lo = 0;
-		    /* OK if trying to get LID fails for port > 1 */
-		    if (lid == -1 && j == 1) {
-			err = psmi_handle_error(NULL, PSM_EP_DEVICE_FAILURE,
-				    "Couldn't get lid for unit %d:%d", i, j);
-			goto fail;
-		    }
-		    else if (lid == -1) /* port not present */
-			    continue;
+
+		    if (lid == -1) continue;
 		    ret = ipath_get_port_gid(i, j, &gid_hi, &gid_lo);
-		    /* OK if trying to get LID fails for port > 1 */
-		    if (ret == -1 && j == 1) {
-			err = psmi_handle_error(NULL, PSM_EP_DEVICE_FAILURE,
-				    "Couldn't get gid for unit %d:%d", i, j);
-			goto fail;
-		    }
-		    else if (ret == -1) /* port not present */
+		    if (ret == -1)
 			continue;
 		    else if (my_gid_hi != gid_hi) {
 		        _IPATH_VDBG("LID %d, unit %d, port %d, "
@@ -159,6 +146,11 @@ psmi_ep_devlids(uint16_t **lids, uint32_t *num_lids_o,
 
 		    ipath_lids[nlids++] = (uint16_t) lid;
 	    }
+	}
+	if (nlids == 0) {
+		err = psmi_handle_error(NULL, PSM_EP_DEVICE_FAILURE,
+			    "Couldn't get lid&gid from any unit/port");
+		goto fail;
 	}
     }
     *lids = ipath_lids;
@@ -272,9 +264,27 @@ __psm_ep_epid_lookup (psm_epid_t epid, psm_epconn_t *epconn)
   
   epaddr = psmi_epid_lookup(psmi_opened_endpoint, epid);
   if (!epaddr) {
-    err =  psmi_handle_error(NULL, PSM_EPID_UNKNOWN,
-			     "Endpoint connection status unknown");
-    return err;
+    /* Search over SL values for bug 122239. Note that function
+     * ips_get_addr_from_epid() converts a base epid to an epaddr,
+     * which can then be used to get the correct epid for this flow.
+     * However, that function is at the IPS level and not accessible 
+     * from here without breaking the layering. */
+    uint64_t lid, context, subcontext, hca_type, sl, try_sl;
+    psm_epid_t try_epid;
+    PSMI_EPID_UNPACK_EXT(epid, lid, context, subcontext, hca_type, sl);
+    for (try_sl = 0; !epaddr && try_sl < 16; try_sl++) {
+      if (try_sl != sl) {
+        try_epid = PSMI_EPID_PACK_EXT(lid, context, subcontext, hca_type,
+				      try_sl);
+        epaddr = psmi_epid_lookup(psmi_opened_endpoint, try_epid);
+      }
+    }
+
+    if (!epaddr) {
+      err =  psmi_handle_error(NULL, PSM_EPID_UNKNOWN,
+			       "Endpoint connection status unknown");
+      return err;
+    }
   }
   
   /* Found connection for epid. Return info about endpoint to caller. */
@@ -1022,7 +1032,7 @@ psmi_ep_open_device(const psm_ep_t ep,
 	 * closing ourselves to the outside world by explicitly disabling the
 	 * ipath device).
 	 */
-	*epid = PSMI_EPID_PACK(0xffff, rank, 0 /* no subcontext */);
+	*epid = PSMI_EPID_PACK(0xffff, (rank>>2), rank);
     } 
 
 fail:

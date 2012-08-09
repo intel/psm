@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -33,6 +33,8 @@
 
 #ifndef PSM_MQ_H
 #define PSM_MQ_H
+
+#include <psm.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -72,6 +74,33 @@ extern "C" {
  * [retval] PSM_OK A new Matched Queue has been instantiated across all the
  *         members of the group.
  *
+ * @verbatim
+ * int try_open_endpoint_and_initialize_mq(
+ *	  psm_ep_t *ep,	// endpoint handle
+ *	  psm_epid_t *epid, // unique endpoint ID
+ *	  psm_uuid_t job_uuid, // unique job uuid, for ep_open
+ *	  psm_mq_t *mq, // MQ handle initialized on endpoint 'ep'
+ *        uint64_t communicator_bits) // Where we store our communicator or
+ *                                    // context bits in the 64-bit tag.
+ * {
+ *     // Simplifed open, see psm_ep_open documentation for more info
+ *     psm_ep_open(job_uuid, 
+ *                 NULL, // no options
+ *                 ep, epid);
+ *
+ *     // We initialize a matched queue by telling PSM the bits that are
+ *     // order-significant in the tag.  Point-to-point ordering will not be
+ *     // maintained between senders where the communicator bits are not the
+ *     // same.
+ *     psm_mq_init(ep,
+ *                 communicator_bits,
+ *                 NULL, // no other MQ options
+ *                 0,    // 0 options passed
+ *                 mq);  // newly initialized matched Queue
+ *
+ *     return 1;
+ * }
+ * @endverbatim
  */
 psm_error_t
 psm_mq_init(psm_ep_t ep, uint64_t tag_order_mask, 
@@ -267,6 +296,30 @@ psm_mq_send(psm_mq_t mq, psm_epaddr_t dest, uint32_t flags, uint64_t stag,
  *
  * [retval] PSM_OK The message has been successfully initiated.
  *
+ * @verbatim
+ * psm_mq_req_t 
+ * non_blocking_send(const psm_mq_t mq, psm_epaddr_t dest_ep,
+ *                       const void *buf, uint32_t len,
+ *			 int context_id, int send_tag, const my_request_t *req)
+ * {
+ *     psm_mq_req_t req_mq;
+ *     // Set up our send tag, assume that "my_rank" is global and represents
+ *     // the rank of this process in the job
+ *     uint64_t tag = ( ((context_id & 0xffff) << 48) |
+ *                      ((my_rank & 0xffff) << 32)    |
+ *                      ((send_tag & 0xffffffff)) );
+ *
+ *     psm_mq_isend(mq, dest_ep, 
+ *                  0, // no flags
+ *                  tag,
+ *                  buf,
+ *                  len,
+ *                  req, // this req is available in psm_mq_status_t when one
+ *                       // of the synchronization functions is called.
+ *                  &req_mq);
+ *     return req_mq;
+ * }
+ * @endverbatim
  */
 psm_error_t
 psm_mq_isend(psm_mq_t mq, psm_epaddr_t dest, uint32_t flags, uint64_t stag, 
@@ -331,7 +384,39 @@ psm_mq_iprobe(psm_mq_t mq, uint64_t rtag, uint64_t rtagsel,
  *                            no further requests ready for completion.  The
  *                            contents of req and status remain
  *                            unchanged.
- */
+ * @verbatim
+ * // Example that uses ipeek_mq_ipeek to make progress instead of psm_poll
+ * // We return the amount of non-blocking requests that we've completed
+ * int main_progress_loop(psm_mq_t mq)
+ * {
+ *     int num_completed = 0;
+ *     psm_mq_req_t req;
+ *     psm_mq_status_t status;
+ *     psm_error_t err;
+ *     my_request_t *myreq;
+ *
+ *     do {
+ *         err = psm_mq_ipeek(mq, &req, 
+ *                            NULL); // No need for status in ipeek here
+ *         if (err == PSM_MQ_NO_COMPLETIONS)
+ *             return num_completed;
+ *         else if (err != PSM_OK)
+ *             goto errh;
+ *         num_completed++;
+ *
+ *         // We obtained 'req' at the head of the completion queue.  We can
+ *         // now free the request with PSM and obtain our original reques
+ *         // from the status' context
+ *         err = psm_mq_test(&req, // will be marked as invalid
+ *                           &status); // we need the status 
+ *         myreq = (my_request_t *) status.context;
+ *
+ *         // handle the completion for myreq whether myreq is a posted receive
+ *         // or a non-blocking send.
+ *    }
+ *    while (1);
+ * }
+ * @endverbatim */
 psm_error_t
 psm_mq_ipeek(psm_mq_t mq, psm_mq_req_t *req, psm_mq_status_t *status);
 
@@ -419,6 +504,29 @@ psm_mq_wait(psm_mq_req_t *request, psm_mq_status_t *status);
  * [retval] PSM_MQ_NO_COMPLETIONS The request is not complete and request is
  *                           unchanged.
  *
+ * @verbatim
+ * // Function that returns the first completed request in an array
+ * // of requests.
+ * void *
+ * user_testany(psm_mq_t mq, psm_mq_req_t *allreqs, int nreqs)
+ * {
+ *   int i;
+ *   void *context = NULL;
+ *
+ *   // Ensure progress only once
+ *   psm_poll(mq);
+ *
+ *   // Test for at least one completion and return it's context
+ *   psm_mq_status_t stat;
+ *   for (i = 0; i < nreqs; i++) {
+ *     if (psm_mq_test(&allreqs[i], &stat) == PSM_OK) {
+ *       context = stat.context;
+ *       break;
+ *     }
+ *   }
+ *   return context;
+ * }
+ * @endverbatim
  */
 psm_error_t
 psm_mq_test(psm_mq_req_t *request, psm_mq_status_t *status);

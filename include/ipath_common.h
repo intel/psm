@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -335,7 +335,6 @@ struct ipath_base_info {
 #define IPATH_PORT_ALG_WITHIN 1 /* use all contexts on an HCA (round robin
                                 * active ports within), then next HCA */
 #define IPATH_PORT_ALG_COUNT 2 /* number of algorithm choices */
-
 
 /*
  * This structure is passed to ipath_userinit() to tell the driver where

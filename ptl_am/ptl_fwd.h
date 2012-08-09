@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -34,7 +34,7 @@
 #ifndef _PTL_FWD_AMSH_H
 #define _PTL_FWD_AMSH_H
 
-#define PTL_AMSH_MAX_LOCAL_PROCS   64
+#define PTL_AMSH_MAX_LOCAL_PROCS   256
 /* Symbol in am ptl */
 struct ptl_ctl_init psmi_ptl_amsh;
 

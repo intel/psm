@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -35,7 +35,7 @@
 #include "psm_am.h"
 #include "psm_am_internal.h"
 
-static int psmi_am_isinit = 0;
+int psmi_ep_device_is_enabled(const psm_ep_t ep, int devid);
 
 static int _ignore_handler(PSMI_AM_ARGS_DEFAULT)
 {
@@ -55,24 +55,17 @@ psmi_am_init_internal(psm_ep_t ep)
     psm_am_handler_fn_t *am_htable;
 
     ep->am_htable = 
-	psmi_malloc(ep, UNDEFINED, sizeof(psm_am_handler_fn_t) * PSM_AM_NUM_HANDLERS);
+	psmi_malloc(ep, UNDEFINED,
+		    sizeof(psm_am_handler_fn_t) * PSMI_AM_NUM_HANDLERS);
     if (ep->am_htable == NULL)
 	return PSM_NO_MEMORY;
 
     am_htable = (psm_am_handler_fn_t *) ep->am_htable;
-    for (i = 0; i < PSM_AM_NUM_HANDLERS; i++) 
+    for (i = 0; i < PSMI_AM_NUM_HANDLERS; i++) 
 	am_htable[i] = _ignore_handler;
 
     return PSM_OK;
 }
-
-psm_error_t
-__psm_am_activate(psm_ep_t ep)
-{
-    psmi_am_isinit = 1;
-    return PSM_OK;
-}
-PSMI_API_DECL(psm_am_activate)
 
 psm_error_t
 __psm_am_register_handlers(psm_ep_t ep, 
@@ -81,10 +74,8 @@ __psm_am_register_handlers(psm_ep_t ep,
 {
     int i, j;
 
-    //psmi_assert_always(psmi_am_isinit == 1);
-
     /* For now just assign any free one */
-    for (i = 0, j = 0; i < PSM_AM_NUM_HANDLERS; i++) {
+    for (i = 0, j = 0; i < PSMI_AM_NUM_HANDLERS; i++) {
 	if (ep->am_htable[i] == _ignore_handler) {
 	    ep->am_htable[i] = handlers[j];
 	    handlers_idx[j] = i;
@@ -153,3 +144,26 @@ __psm_am_reply_short(psm_am_token_t token, psm_handler_t handler,
 }
 PSMI_API_DECL(psm_am_reply_short)
  
+psm_error_t
+__psm_am_get_parameters(psm_ep_t ep, struct psm_am_parameters *parameters,
+			size_t sizeof_parameters_in,
+			size_t *sizeof_parameters_out)
+{
+    struct psm_am_parameters params;
+    size_t s;
+    uint32_t frag_sz;
+    /* This is the same calculation as PSM_AM_OPT_FRAG_SZ in psm_utils.c */
+    frag_sz = (ep && psmi_ep_device_is_enabled(ep, PTL_DEVID_IPS)) ?
+              (ep->context.base_info.spi_piosize -
+              IPATH_MESSAGE_HDR_SIZE) : 2048;
+    params.max_handlers = PSMI_AM_NUM_HANDLERS;
+    params.max_nargs = PSMI_AM_MAX_ARGS;
+    params.max_request_short = frag_sz;
+    params.max_reply_short = frag_sz;
+    memset(parameters, 0, sizeof_parameters_in);
+    s = min(sizeof(params), sizeof_parameters_in);
+    memcpy(parameters, &params, s);
+    *sizeof_parameters_out = s;
+    return PSM_OK;
+}
+PSMI_API_DECL(psm_am_get_parameters)

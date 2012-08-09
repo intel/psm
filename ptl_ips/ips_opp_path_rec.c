@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -121,8 +121,17 @@ ips_opp_get_path_rec(ips_path_type_t type, struct ips_proto *proto,
       ips_ipd_delay[opp_path_rec->ips.epr_static_rate];
     
     /* Setup CCA parameters for path */
+    if (opp_path_rec->ips.epr_sl > 15) {
+	err = PSM_INTERNAL_ERR;
+	goto fail;
+    }
+    if (!(proto->ccti_ctrlmap&(1<<opp_path_rec->ips.epr_sl))) {
+	_IPATH_CCADBG("No CCA for sl %d, disable CCA\n",
+		opp_path_rec->ips.epr_sl);
+	proto->flags &= ~IPS_PROTO_FLAG_CCA;
+    }
     opp_path_rec->ips.proto = proto;
-    opp_path_rec->ips.epr_ccti_min = 0;
+    opp_path_rec->ips.epr_ccti_min = proto->cace[opp_path_rec->ips.epr_sl].ccti_min;
     opp_path_rec->ips.epr_ccti = opp_path_rec->ips.epr_ccti_min;
     psmi_timer_entry_init(&opp_path_rec->ips.epr_timer_cca,
 			  ips_cca_timer_callback, &opp_path_rec->ips);
@@ -424,6 +433,11 @@ psm_error_t ips_opp_init(struct ips_proto *proto)
   return err;
   
  fail:
+  _IPATH_ERROR("Make sure SM is running...\n");
+  _IPATH_ERROR("Make sure service qlogic_sa is running...\n");
+  _IPATH_ERROR("to start qlogic_sa: service qlogic_sa start\n");
+  _IPATH_ERROR("or enable it at boot time: iba_config -E qlogic_sa\n\n");
+
   err = psmi_handle_error(NULL, PSM_EPID_PATH_RESOLUTION,
 			  "Unable to initialize OFED Plus library successfully.\n");
 

@@ -34,7 +34,7 @@ top_srcdir := ..
 include $(top_srcdir)/buildflags.mak
 INCLUDES += -I$(top_srcdir)
 
-${TARGLIB}-objs := am_reqrep_shmem.o ptl.o kcopyrwu.o
+${TARGLIB}-objs := am_reqrep_shmem.o ptl.o kcopyrwu.o knemrwu.o
 
 all: ${${TARGLIB}-objs}
 
