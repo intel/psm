@@ -1,3 +1,4 @@
+# Copyright (c) 2013 Intel Corporation.  All rights reserved.
 # Copyright (c) 2006-2011. QLogic Corporation. All rights reserved.
 # Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
 #
@@ -95,10 +96,13 @@ MAJOR := $(PSM_LIB_MAJOR)
 MINOR := $(PSM_LIB_MINOR)
 
 # The desired version number comes from the most recent tag starting with "v"
-VERSION := $(shell if [ -d .git ] ; then git log --decorate | awk '/^commit.*tag:/ { if (match($$0, "tag: v[a-zA-Z0-9\._]+")) { print substr($$0,RSTART+6,RLENGTH-6); exit } }' 2> /dev/null ; else echo "version" ; fi)
+VERSION := $(shell if [ -d .git ] ; then  git  describe --tags --abbrev=0 --match='v*' | sed -e 's/^v//' -e 's/-/_/'; else echo "version" ; fi)
 
-# The desired release number comes from the most recent tag starting with "r"
-RELEASE := $(shell if [ -d .git ] ; then git log --decorate | awk '/^commit.*tag:/ { if (match($$0, "tag: r[a-zA-Z0-9\._]+")) { print substr($$0,RSTART+6,RLENGTH-6); exit } }' 2> /dev/null ; else echo "release" ; fi)
+# The desired release number comes the git describe following the version which
+# is the number of commits since the version tag was planted suffixed by the g<commitid>
+RELEASE := $(shell if [ -d .git ] ; then git describe --tags --long --match='v*' | sed -e 's/v[0-9.]*-\(.*\)/\1_open/' -e 's/-/_/'; else echo "release" ; fi)
+
+EPOCH := $(shell if [ -d .git ] ; then git describe --tags --long --match='v*'  | sed -e 's/v[0-9.]*-//' -e 's/\([0-9]*\)-.*/\1/'; else echo "epoch" ; fi)
 
 # Concatenated version and release
 VERSION_RELEASE := $(VERSION)-$(RELEASE)
@@ -149,7 +153,10 @@ install: all
 	install -D psm_mq.h ${DESTDIR}/usr/include/psm_mq.h
 
 specfile:
-	sed -e 's/@VERSION@/'${VERSION}'/g' ${RPM_NAME}.spec.in | \
+	sed \
+		-e 's/@VERSION@/'${VERSION}'/g' \
+		-e 's/@RELEASE@/'${RELEASE}'/g' \
+		-e 's/@EPOCH@/'${EPOCH}'/g' ${RPM_NAME}.spec.in | \
 		sed -e 's/@RELEASE@/'${RELEASE}'/g' > \
 		${RPM_NAME}.spec
 	if [ X$(PSM_USE_SYS_UUID) = X1 ]; then \
@@ -257,7 +264,7 @@ ${TARGLIB}.so.${MAJOR}.${MINOR}: ${${TARGLIB}-objs}
 	$(CC) $(LDFLAGS) -o $@ -Wl,-soname=${TARGLIB}.so.${MAJOR} -shared -Wl,--unique='*fastpath*' \
 		${${TARGLIB}-objs} _revision.o -Lipath $(LDLIBS)
 	@leaks=`nm $@ | grep ' [DT] ' | \
-	 grep -v -e ' [DT] \(_fini\|_init\|infinipath_\|ips_\|psmi\|__psmi\?_\|_\rest.pr\|_save.pr\|kcopy\|knem\)'`; \
+	 grep -v -e ' [DT] \(_edata\|_fini\|_init\|infinipath_\|ips_\|psmi\|__psmi\?_\|_\rest.pr\|_save.pr\|kcopy\|knem\)'`; \
 	 if test -n "$$leaks"; then echo "Build failed, leaking symbols:"; echo "$$leaks"; exit 1; fi
 
 %.o: %.c

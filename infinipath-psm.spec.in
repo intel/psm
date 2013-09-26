@@ -2,6 +2,7 @@ Summary: QLogic PSM Libraries
 Name: infinipath-psm
 Version: @VERSION@
 Release: @RELEASE@
+Epoch: @EPOCH@
 License: GPL
 Group: System Environment/Libraries
 URL: http://www.qlogic.com/
@@ -16,7 +17,7 @@ Conflicts: infinipath-libs
 %package devel
 Summary: Development files for QLogic PSM
 Group: System Environment/Development
-Requires: %{name} = %{version}-%{release}
+Requires: %{name} = %{epoch}:%{version}-%{release}
 Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
 @REQUIRES-DEVEL@
