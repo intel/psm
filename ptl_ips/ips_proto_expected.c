@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -811,7 +812,6 @@ ips_protoexp_data(struct ips_recvhdrq_event *rcv_ev)
     psmi_seqnum_t sequence_num, expected_sequence_num;
     uint32_t has_hw_hdrsupp = (protoexp->ptl->context->runtime_flags & IPATH_RUNTIME_HDRSUPP);
     ptl_arg_t args[3];
-    uint32_t unaligned_data_sz;
     
     paylen = ips_recvhdrq_event_paylen(rcv_ev);
     tid_recv_sessid = desc_id._desc_idx;
@@ -907,9 +907,6 @@ ips_protoexp_data(struct ips_recvhdrq_event *rcv_ev)
     psmi_assert_always(((__be32_to_cpu(rcv_ev->p_hdr->bth[0]) >> 20) & 3) == 0);
     psmi_assert_always(tidrecvc->state  != TIDRECVC_STATE_DONE);
     
-    unaligned_data_sz = tidrecvc->tid_list.tsess_unaligned_start +
-      tidrecvc->tid_list.tsess_unaligned_end;
-    
     /* If first packet received cancel tid grant timer */
     if (tidrecvc->num_recv_hdrs++ == 0)
       psmi_timer_cancel(protoexp->timerq, &tidrecvc->timer_tidreq);
@@ -924,8 +921,11 @@ ips_protoexp_data(struct ips_recvhdrq_event *rcv_ev)
      */
 
     if (p_hdr->flags & IPS_SEND_FLAG_EXPECTED_DONE) {
-      
-      psm_error_t ret = PSM_OK;
+#ifndef PSM_DEBUG
+      psm_error_t ret __unused__;
+#else
+      psm_error_t ret;
+#endif
       
       /* Acquire lock before updating state (ERR_CHK_GEN also tests for
        * state before responding.
@@ -1359,7 +1359,7 @@ ips_scb_send_unaligned_data(ips_scb_t *scb)
 
   /* Enqueue scb on the flow and flush */
   flow->fn.xfer.enqueue(flow, scb);
-  flow->fn.xfer.flush(flow, NULL);
+  (void)flow->fn.xfer.flush(flow, NULL);
   
   return PSM_OK;
 }
@@ -2225,10 +2225,8 @@ psm_error_t
 __fastpath
 ips_protoexp_flow_newgen(struct ips_tid_recv_desc *tidrecvc)
 {
-  psm_error_t err = PSM_EP_NO_RESOURCES;
-  
   psmi_assert_always(tidrecvc->state != TIDRECVC_STATE_DONE);
-  err = ips_tfgen_allocate(&tidrecvc->protoexp->tfctrl,
+  (void)ips_tfgen_allocate(&tidrecvc->protoexp->tfctrl,
 			   tidrecvc->tidflow_idx,
 			   &tidrecvc->tidflow_active_gen);
   

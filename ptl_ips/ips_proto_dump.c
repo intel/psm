@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -83,7 +84,7 @@ void ips_proto_show_header(struct ips_message_header *p_hdr, char *msg)
 {
     uint32_t tid;
     psm_protocol_type_t protocol;
-    ptl_epaddr_flow_t flowid;
+    ptl_epaddr_flow_t flowid __unused__;
     psmi_seqnum_t ack_seq_num;
         
     printf("\nHeader decoding %s\n",msg?msg:"");

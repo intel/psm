@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -55,7 +56,7 @@ ipath_vsyslog(const char *prefix, int to_console, int level,
 	char hostname[80];
 	va_list ap_cons;
 	va_copy(ap_cons, ap);
-	size_t len = strlen(format);
+	len = strlen(format);
 	gethostname(hostname, sizeof hostname);
 	hostname[sizeof hostname - 1] = '\0';
 

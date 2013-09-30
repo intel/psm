@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -60,6 +61,7 @@ typedef struct _atomic {
   #define if_pf(cond) if (cond)
   #define _Pragma_unlikely _Pragma("mips_frequency_hint never")
   #define _Pragma_likely   _Pragma("mips_frequency_hint frequent")
+  #define __unused__
 #elif defined(__GNUC__) || (defined(__PATHCC__) && __PATHCC__ >= 3)
   #define likely(x)    __builtin_expect(!!(x), 1L)
   #define unlikely(x)  __builtin_expect(!!(x), 0L)
@@ -67,6 +69,7 @@ typedef struct _atomic {
   #define if_pf(cond) if (unlikely(cond))
   #define _Pragma_unlikely
   #define _Pragma_likely
+  #define __unused__ __attribute__((unused))
 #else
   #error "Unsupported compiler"
 #endif

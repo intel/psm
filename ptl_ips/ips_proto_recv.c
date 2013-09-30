@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. QLogic Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -407,7 +408,7 @@ void ips_tidflow_nak_post_process(struct ips_flow *flow,
   
   ips_scb_t *scb;
   struct ips_scb_unackedq *unackedq = &flow->scb_unacked;
-  psmi_seqnum_t new_flowgenseq;
+  psmi_seqnum_t new_flowgenseq __unused__;
 	
   new_flowgenseq.val = p_hdr->data[1].u32w0;
   /* Update any pending scb's to the new generation count.
@@ -536,7 +537,7 @@ ips_proto_process_ack(struct ips_recvhdrq_event *rcv_ev)
     }
     
     /* Reclaimed some credits - attempt to flush flow */
-    flow->fn.xfer.flush(flow, NULL);
+    (void)flow->fn.xfer.flush(flow, NULL);
     
     /*
      * If the next packet has not even been put on the wire, cancel the
@@ -692,7 +693,7 @@ _process_nak(struct ips_recvhdrq_event *rcv_ev)
       flow->ack_interval = max((flow->credits >> 2) - 1, 1);
       
       /* Flush pending scb's */
-      flow->fn.xfer.flush(flow, &num_resent);
+      (void)flow->fn.xfer.flush(flow, &num_resent);
       ipsaddr->stats.send_rexmit += num_resent;
     }
     
@@ -971,7 +972,7 @@ ips_proto_process_unknown(const struct ips_recvhdrq_event *rcv_ev)
     char *pkt_type;
     int opcode = (int) p_hdr->sub_opcode;
     double t_elapsed;
-    psm_protocol_type_t protocol;
+    psm_protocol_type_t protocol __unused__;
     ptl_epaddr_flow_t flowid;
     const uint16_t lmc_mask = ~((1 << rcv_ev->proto->epinfo.ep_lmc) - 1);
 

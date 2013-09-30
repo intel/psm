@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -488,7 +489,7 @@ __psm_mq_irecv(psm_mq_t mq, uint64_t tag, uint64_t tagsel, uint32_t flags,
 ret:
     PSMI_PUNLOCK();
     *reqo = req;
-    return PSM_OK;
+    return err;
 }
 PSMI_API_DECL(psm_mq_irecv)
 

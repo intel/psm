@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -77,7 +78,7 @@ ips_flow_gen_ackflags(ips_scb_t *scb, struct ips_flow *flow))
 PSMI_ALWAYS_INLINE(
 ptl_epaddr_flow_t ips_proto_flowid(struct ips_message_header *p_hdr))
 {
-  psm_protocol_type_t protocol;
+  psm_protocol_type_t protocol __unused__;
   ptl_epaddr_flow_t flowidx;
   
   IPS_FLOWID_UNPACK(p_hdr->flowid, protocol, flowidx);
@@ -246,8 +247,11 @@ PSMI_ALWAYS_INLINE(
 uint32_t ips_proto_dest_context_from_header(struct ips_proto *proto,
 					    struct ips_message_header *p_hdr))
 {
-  uint64_t lid, context, subcontext;
-  uint16_t hca_type, sl;
+  uint64_t lid __unused__;
+  uint64_t context __unused__;
+  uint64_t subcontext __unused__;
+  uint16_t hca_type;
+  uint16_t sl __unused__;
   uint32_t dest_context;
   
   PSMI_EPID_UNPACK_EXT(proto->ep->epid, lid, context, subcontext, hca_type, sl);
@@ -431,7 +435,7 @@ ips_proto_send_ack(struct ips_recvhdrq *recvq, struct ips_flow *flow))
   }
   else {
     /* Coalesced ACKs disabled. Send ACK immediately */
-    ips_proto_send_ctrl_message(flow, OPCODE_ACK, 
+    ips_proto_send_ctrl_message(flow, OPCODE_ACK,
 				&flow->ipsaddr->ctrl_msg_queued, NULL);
   }
 }

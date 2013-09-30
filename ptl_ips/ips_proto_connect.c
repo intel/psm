@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -497,7 +498,8 @@ ips_alloc_epaddr(struct ips_proto *proto, psm_epid_t epid,
     psm_epaddr_t epaddr;
     ips_epaddr_t *ipsaddr;
     uint64_t lid, context, subcontext;
-    uint16_t hca_type, sl, path_dlid;
+    uint16_t hca_type, path_dlid;
+    uint16_t sl __unused__;
     uint16_t lmc_mask = ~((1 << proto->epinfo.ep_lmc) - 1);
     int i;
     ips_path_type_t prio;
@@ -539,7 +541,10 @@ ips_alloc_epaddr(struct ips_proto *proto, psm_epid_t epid,
     err = ips_init_ep_qp_and_pkt_context(hca_type, proto->epinfo.ep_baseqp,
 					 context, ipsaddr);
     if (err != PSM_OK) {
-	uint64_t llid, lcontext, lsubcontext, lsl;	
+	uint64_t llid __unused__;
+	uint64_t lsl __unused__;
+	uint64_t lcontext __unused__;
+	uint64_t lsubcontext __unused__;
 	_IPATH_ERROR("Connect: Warning! unknown HCA type %d. Assuming remote HCA is same as local.\n", hca_type);
 	PSMI_EPID_UNPACK_EXT(proto->ep->epid, llid, lcontext, lsubcontext, hca_type, lsl);
         ips_init_ep_qp_and_pkt_context(hca_type, proto->epinfo.ep_baseqp,
@@ -652,7 +657,8 @@ static psm_error_t ips_get_addr_from_epid(struct ips_proto *proto,
 {
   psm_error_t err;
   uint64_t lid, context, subcontext;
-  uint16_t hca_type, sl, path_dlid;
+  uint16_t hca_type, path_dlid;
+  uint16_t sl __unused__;
   psm_epid_t path_epid;
   psm_epaddr_t ep_address = NULL;
   uint16_t lmc_mask = ~((1 << proto->epinfo.ep_lmc) - 1);

@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -1142,7 +1143,7 @@ ips_proto_timer_ctrlq_callback(struct psmi_timer *timer, uint64_t t_cyc_expire)
     psm_error_t err;
     struct ptl_epaddr *ipsaddr;
     uint32_t cksum = 0;
-    int paylen;
+    int paylen __unused__;
     uint8_t discard_msg = 0;
     
     // service ctrl send queue first
@@ -1345,7 +1346,7 @@ ips_proto_flow_flush_dma(struct ips_flow *flow, int *nflushed)
 {
     struct ips_proto *proto = flow->ipsaddr->proto;
     struct ips_scb_pendlist *scb_pend = &flow->scb_pend;
-    uint32_t cntr_init;
+    uint32_t cntr_init __unused__;
     ips_scb_t *scb;
     psm_error_t err = PSM_OK;
     int howmany = 0;
@@ -1972,7 +1973,7 @@ ips_proto_timer_send_callback(struct psmi_timer *current_timer, uint64_t current
 		proto->cace[flow->path->epr_sl].ccti_increase);
     }
 
-    flow->fn.xfer.flush(flow, NULL);    
+    (void)flow->fn.xfer.flush(flow, NULL);
     return PSM_OK;
 }
 

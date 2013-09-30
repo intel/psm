@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -322,7 +323,9 @@ spio_update_shadow(struct ips_spio *ctrl, int index)
 	 * is not supported in the current implementation and in general is
 	 * bad for the SM to re-assign LIDs during a run.
 	 */
-	int lid, olid, context, subcontext;
+	int lid, olid;
+	int context __unused__;
+	int subcontext __unused__;
 	
 	lid = 
 	  ipath_get_port_lid(proto->ep->context.base_info.spi_unit,

@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -78,7 +79,6 @@ struct ips_message_header {
 	    __u16 amhdr_hidx  : 8; 
 	    __u16 amhdr_nargs : 3;
 	    __u16 amhdr_flags : 3; /* Reduced from 5 bits previously */
-	    __u16 dst_subcontext : 2; /* Destination subcontext */
 	  };
 	  __u16 mqhdr_org;
 	};

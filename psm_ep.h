@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. QLogic Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -76,7 +77,8 @@
   PSMI_EPID_PACK_EXT(lid,context,subcontext,PSMI_HCA_TYPE_DEFAULT, PSMI_SL_DEFAULT)
 
 #define PSMI_EPID_UNPACK(epid,lid,context,subcontext) do {	\
-    uint32_t hca_type, sl;					\
+    uint32_t hca_type __unused__;				\
+    uint32_t sl __unused__;					\
     PSMI_EPID_UNPACK_EXT(epid,lid,context,subcontext,hca_type,sl);	\
   } while (0)
 

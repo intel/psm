@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -163,7 +164,9 @@ fail:
 uint64_t
 __psm_epid_nid(psm_epid_t epid)
 {
-    uint64_t lid, context, subcontext;
+    uint64_t lid;
+    uint64_t context __unused__;
+    uint64_t subcontext __unused__;
 
     PSMI_EPID_UNPACK(epid, lid, context, subcontext);
     return lid;
@@ -175,7 +178,9 @@ PSMI_API_DECL(psm_epid_nid)
 uint64_t
 psmi_epid_subcontext(psm_epid_t epid)
 {
-    uint64_t lid, context, subcontext;
+    uint64_t subcontext;
+    uint64_t lid __unused__;
+    uint64_t context __unused__;
     PSMI_EPID_UNPACK(epid, lid, context, subcontext);
     return subcontext;
 }
@@ -187,7 +192,11 @@ psmi_epid_subcontext(psm_epid_t epid)
 uint64_t
 psmi_epid_hca_type(psm_epid_t epid)
 {
-  uint64_t lid, context, subcontext, hca_type, sl;
+  uint64_t hca_type;
+  uint64_t lid __unused__;
+  uint64_t context __unused__;
+  uint64_t subcontext __unused__;
+  uint64_t sl __unused__;
   PSMI_EPID_UNPACK_EXT(epid, lid, context, subcontext, hca_type, sl);
   return hca_type;
 }
@@ -195,7 +204,11 @@ psmi_epid_hca_type(psm_epid_t epid)
 uint64_t
 psmi_epid_sl(psm_epid_t epid)
 {
-  uint64_t lid, context, subcontext, hca_type, sl;
+  uint64_t sl;
+  uint64_t lid __unused__;
+  uint64_t context __unused__;
+  uint64_t subcontext __unused__;
+  uint64_t hca_type __unused__;
   PSMI_EPID_UNPACK_EXT(epid, lid, context, subcontext, hca_type, sl);
   return sl;
 }
@@ -203,7 +216,9 @@ psmi_epid_sl(psm_epid_t epid)
 uint64_t
 __psm_epid_context(psm_epid_t epid)
 {
-    uint64_t lid, context, subcontext;
+    uint64_t lid __unused__;
+    uint64_t subcontext __unused__;
+    uint64_t context;
 
     PSMI_EPID_UNPACK(epid, lid, context, subcontext);
     return context;

@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -388,7 +389,6 @@ PSMI_ALWAYS_INLINE(
 void
 process_pending_acks(struct ips_recvhdrq *recvq))
 {
-  psm_error_t err;
   
   /* If any pending acks, dispatch them now */
   while (!SLIST_EMPTY(&recvq->pending_acks)) {
@@ -401,14 +401,14 @@ process_pending_acks(struct ips_recvhdrq *recvq))
       psmi_assert_always((flow->flags & IPS_FLOW_FLAG_PENDING_NAK) == 0);
       
       flow->flags &= ~IPS_FLOW_FLAG_PENDING_ACK;
-      err = ips_proto_send_ctrl_message(flow, OPCODE_ACK, 
+      (void)ips_proto_send_ctrl_message(flow, OPCODE_ACK,
 					&flow->ipsaddr->ctrl_msg_queued, NULL);
     }
     else {
       psmi_assert_always(flow->flags & IPS_FLOW_FLAG_PENDING_NAK);
       
       flow->flags &= ~IPS_FLOW_FLAG_PENDING_NAK;
-      err = ips_proto_send_ctrl_message(flow, OPCODE_NAK, 
+      (void)ips_proto_send_ctrl_message(flow, OPCODE_NAK,
 					&flow->ipsaddr->ctrl_msg_queued, NULL);
     }
     

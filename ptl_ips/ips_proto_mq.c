@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -170,7 +171,7 @@ ips_mq_send_payload(ptl_t *ptl, ips_epaddr_t *ipsaddr, psmi_egrid_t egrid,
 		    void *ubuf, uint32_t len, psm_mq_req_t req,
 		    uint32_t flags)
 {
-    psm_error_t err;
+    psm_error_t err = PSM_OK;
 
     ips_scb_t *scb;
     uintptr_t buf = (uintptr_t) ubuf;
@@ -240,7 +241,7 @@ ips_mq_send_payload(ptl_t *ptl, ips_epaddr_t *ipsaddr, psmi_egrid_t egrid,
 	     * we need to flush the pending queue */
 	    if (!(flags & IPS_PROTO_FLAG_MQ_EAGER_SDMA) ||
 	    !ips_scbctrl_avail(scb->scbc)) {
-	        err = flow->fn.xfer.flush(flow, NULL);
+	        (void)flow->fn.xfer.flush(flow, NULL);
 	        err = ips_recv_progress_if_busy(ipsaddr->ptl, err);
 	    }
 	} while (curscb != NULL);
@@ -690,7 +691,7 @@ ips_proto_mq_push_eager_req(struct ips_proto *proto, psm_mq_req_t req)
     }
 
     flow->fn.xfer.enqueue(flow, scb);
-    flow->fn.xfer.flush(flow, NULL);
+    (void)flow->fn.xfer.flush(flow, NULL);
 
     return PSM_OK;
 }
@@ -735,7 +736,7 @@ ips_proto_mq_push_eager_data(struct ips_proto *proto, psm_mq_req_t req)
 	SLIST_NEXT(scb, next) = NULL;
 
 	flow->fn.xfer.enqueue(flow, scb);
-	flow->fn.xfer.flush(flow, NULL);
+	(void)flow->fn.xfer.flush(flow, NULL);
 
 	nbytes_left      -= nbytes_this;
 	req->send_msgoff += nbytes_this;

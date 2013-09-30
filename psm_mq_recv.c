@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -108,7 +109,6 @@ psmi_mq_handle_rts(psm_mq_t mq, uint64_t tag,
 		   psm_mq_req_t *req_o)
 {
     psm_mq_req_t req;
-    uint32_t msglen;
     int rc;
 
     PSMI_PLOCK_ASSERT();
@@ -116,7 +116,7 @@ psmi_mq_handle_rts(psm_mq_t mq, uint64_t tag,
     req = mq_req_match(&(mq->expected_q), tag, 1);
 
     if (req) { /* we have a match, no need to callback */
-	msglen = mq_set_msglen(req, req->buf_len, send_msglen);
+	(void)mq_set_msglen(req, req->buf_len, send_msglen);
 	req->type = MQE_TYPE_RECV;
 	req->state = MQ_STATE_MATCHED;
 	req->tag = tag;

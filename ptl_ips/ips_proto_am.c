@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -80,7 +81,6 @@ am_short_reqrep(struct ips_proto_am *proto_am, ips_scb_t *scb,
 		void *src, size_t len, int flags, int pad_bytes)
 		    
 {
-    psm_error_t err;
     int i, hdr_qwords = PSM_AM_HDR_QWORDS;
     ptl_epaddr_flow_t flowid = ((sub_opcode == OPCODE_AM_REQUEST) || 
 				(sub_opcode == OPCODE_AM_REQUEST_NOREPLY)) ?
@@ -144,7 +144,7 @@ am_short_reqrep(struct ips_proto_am *proto_am, ips_scb_t *scb,
 send_scb:
     scb->ips_lrh.sub_opcode = sub_opcode;
     flow->fn.xfer.enqueue(flow, scb);
-    err = flow->fn.xfer.flush(flow, NULL);
+    (void)flow->fn.xfer.flush(flow, NULL);
     return PSM_OK;
 }
 
