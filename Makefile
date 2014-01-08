@@ -102,7 +102,7 @@ VERSION := $(shell if [ -d .git ] ; then  git  describe --tags --abbrev=0 --matc
 # is the number of commits since the version tag was planted suffixed by the g<commitid>
 RELEASE := $(shell if [ -d .git ] ; then git describe --tags --long --match='v*' | sed -e 's/v[0-9.]*-\(.*\)/\1_open/' -e 's/-/_/'; else echo "release" ; fi)
 
-EPOCH := $(shell if [ -d .git ] ; then git describe --tags --long --match='v*'  | sed -e 's/v[0-9.]*-//' -e 's/\([0-9]*\)-.*/\1/'; else echo "epoch" ; fi)
+EPOCH := 4
 
 # Concatenated version and release
 VERSION_RELEASE := $(VERSION)-$(RELEASE)
