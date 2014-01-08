@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -68,7 +69,7 @@ STAILQ_HEAD(ips_scb_stailq, ips_scb);
 SLIST_HEAD(ips_scb_slist, ips_scb);
 
 struct ips_scbctrl {
-    const psmi_context_t *context;
+    //const psmi_context_t *context;
 
     /* Send control blocks for each send */
     uint32_t			     scb_num;
@@ -116,21 +117,29 @@ struct ips_scb {
 	/* Used when composing packet */
 	psmi_seqnum_t seq_num;
 	uint32_t payload_size;
+	uint32_t extra_bytes;
         uint32_t cksum;
 	uint32_t flags;
 	uint32_t dma_ctr;
+	uint32_t payload_bytes;
+	uint16_t pkt_flags;
         uint16_t tid;
 	uint16_t offset;
+	uint16_t nfrag;
+	uint16_t frag_size;
   
+	struct ips_flow *flow;
 	struct ptl_epaddr *epaddr;
 	struct ips_tid_send_desc *tidsendc;
+	void	*tsess;
+	uint16_t tsess_length;
 	
 
 	struct ips_scbctrl *scbc;
         void               *imm_payload;
 
         union {
-	  int (*callback) (void *);
+	  int (*callback) (void *, uint32_t);
 	  psm_am_completion_fn_t completion_am;
 	};
 	void *cb_param;

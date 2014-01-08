@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -100,7 +101,7 @@ psmi_mq_req_init(psm_mq_t mq)
 	struct psmi_rlimit_mpool rlim = MQ_SENDREQ_LIMITS;
 	uint32_t maxsz, chunksz;
 
-	if ((err = psmi_ep_parse_mpool_env(mq->ep, 0, &rlim, &maxsz, &chunksz)))
+	if ((err = psmi_parse_mpool_env(mq, 0, &rlim, &maxsz, &chunksz)))
 	    goto fail;
 				    
 	if ((mq->sreq_pool = psmi_mpool_create(sizeof(struct psm_mq_req), 
@@ -119,7 +120,7 @@ psmi_mq_req_init(psm_mq_t mq)
 	struct psmi_rlimit_mpool rlim = MQ_RECVREQ_LIMITS;
 	uint32_t maxsz, chunksz;
 
-	if ((err = psmi_ep_parse_mpool_env(mq->ep, 0, &rlim, &maxsz, &chunksz)))
+	if ((err = psmi_parse_mpool_env(mq, 0, &rlim, &maxsz, &chunksz)))
 	    goto fail;
 
 	if ((mq->rreq_pool = 
@@ -174,58 +175,31 @@ psmi_mq_sysbuf_free(psm_mq_t mq, void *ptr)
 }
 
 #else
-#define MM_FLAG_NONE  0
-#define MM_FLAG_TRANSIENT  0x1
-#define MM_NUM_OF_POOLS 7
-
-typedef struct _mem_block_ctrl mem_block_ctrl; 
-typedef struct _mem_ctrl mem_ctrl;
-
-struct _mem_ctrl {
-    mem_block_ctrl *free_list;
-    uint32_t total_alloc;
-    uint32_t current_available;
-    uint32_t block_size;
-    uint32_t flags;
-    uint32_t replenishing_rate;
-};
-
-struct _mem_block_ctrl {
-    union {
-        mem_ctrl *mem_handler;
-        mem_block_ctrl *next;
-    };
-    char _redzone[PSM_VALGRIND_REDZONE_SZ];
-};
-
-static uint32_t block_sizes[] = {256, 512, 1024, 2048, 4096, 8192, (uint32_t)-1};
-static uint32_t replenishing_rate[] = {128, 64, 32, 16, 8, 4, 0};
-static mem_ctrl handler_index[MM_NUM_OF_POOLS];
-static int      mem_ctrl_is_init = 0;
-static uint64_t mem_ctrl_total_bytes = 0;
 
 void psmi_mq_sysbuf_init(psm_mq_t mq)
 {
     int i;
+    uint32_t block_sizes[] = {256, 512, 1024, 2048, 4096, 8192, (uint32_t)-1};
+    uint32_t replenishing_rate[] = {128, 64, 32, 16, 8, 4, 0};
 
-    if (mem_ctrl_is_init)
+    if (mq->mem_ctrl_is_init)
 	return;
-    mem_ctrl_is_init = 1;
+    mq->mem_ctrl_is_init = 1;
 
     for (i=0; i < MM_NUM_OF_POOLS; i++) {
-        handler_index[i].block_size = block_sizes[i];
-        handler_index[i].current_available = 0;
-        handler_index[i].free_list = NULL;
-        handler_index[i].total_alloc = 0;
-        handler_index[i].replenishing_rate = replenishing_rate[i];
+        mq->handler_index[i].block_size = block_sizes[i];
+        mq->handler_index[i].current_available = 0;
+        mq->handler_index[i].free_list = NULL;
+        mq->handler_index[i].total_alloc = 0;
+        mq->handler_index[i].replenishing_rate = replenishing_rate[i];
 
 	if (block_sizes[i] == -1) {
 	    psmi_assert_always(replenishing_rate[i] == 0);
-	    handler_index[i].flags = MM_FLAG_TRANSIENT;
+	    mq->handler_index[i].flags = MM_FLAG_TRANSIENT;
 	}
 	else {
 	    psmi_assert_always(replenishing_rate[i] > 0);
-	    handler_index[i].flags = MM_FLAG_NONE;
+	    mq->handler_index[i].flags = MM_FLAG_NONE;
 	}
     }
 
@@ -248,25 +222,25 @@ psmi_mq_sysbuf_fini(psm_mq_t mq)  // free all buffers that is currently not used
     mem_block_ctrl *block;
     int i;
 
-    if (mem_ctrl_is_init == 0)
+    if (mq->mem_ctrl_is_init == 0)
 	return;
 
     VALGRIND_DESTROY_MEMPOOL(mq);
 
     for (i=0; i < MM_NUM_OF_POOLS; i++) {
-	while ((block = handler_index[i].free_list) != NULL) {
-	    handler_index[i].free_list = block->next;
+	while ((block = mq->handler_index[i].free_list) != NULL) {
+	    mq->handler_index[i].free_list = block->next;
 	    psmi_free(block);
 	}
     }
-    mem_ctrl_is_init = 0;
+    mq->mem_ctrl_is_init = 0;
 }
 
 void
 psmi_mq_sysbuf_getinfo(psm_mq_t mq, char *buf, size_t len)
 {
     snprintf(buf, len-1, "Sysbuf consumption: %"PRIu64" bytes\n",
-	    mem_ctrl_total_bytes);
+	    mq->mem_ctrl_total_bytes);
     buf[len-1] = '\0';
     return;
 }
@@ -274,13 +248,13 @@ psmi_mq_sysbuf_getinfo(psm_mq_t mq, char *buf, size_t len)
 void * 
 psmi_mq_sysbuf_alloc(psm_mq_t mq, uint32_t alloc_size)
 {
-    mem_ctrl *mm_handler = handler_index;
+    mem_ctrl *mm_handler = mq->handler_index;
     mem_block_ctrl *new_block;
     int replenishing;
 
     /* There is a timing race with ips initialization, fix later.
      * XXX */
-    if (!mem_ctrl_is_init)
+    if (!mq->mem_ctrl_is_init)
 	psmi_mq_sysbuf_init(mq);
 
     mq->stats.rx_sysbuf_num++;
@@ -301,7 +275,7 @@ psmi_mq_sysbuf_alloc(psm_mq_t mq, uint32_t alloc_size)
 		new_block->mem_handler = mm_handler;
                 new_block++;
                 mm_handler->total_alloc++;
-		mem_ctrl_total_bytes += newsz;
+		mq->mem_ctrl_total_bytes += newsz;
 		VALGRIND_MEMPOOL_ALLOC(mq, new_block, alloc_size);
             }
             return new_block;
@@ -312,7 +286,7 @@ psmi_mq_sysbuf_alloc(psm_mq_t mq, uint32_t alloc_size)
 			     PSM_VALGRIND_REDZONE_SZ;
 
             new_block = psmi_malloc(mq->ep, UNEXPECTED_BUFFERS, newsz);
-	    mem_ctrl_total_bytes += newsz;
+	    mq->mem_ctrl_total_bytes += newsz;
 
             if (new_block) {
                 mm_handler->current_available++;
@@ -346,7 +320,7 @@ void psmi_mq_sysbuf_free(psm_mq_t mq, void * mem_to_free)
     mem_block_ctrl * block_to_free;
     mem_ctrl *mm_handler;
 
-    psmi_assert_always(mem_ctrl_is_init);
+    psmi_assert_always(mq->mem_ctrl_is_init);
 
     block_to_free = (mem_block_ctrl *)mem_to_free - 1;
     mm_handler = block_to_free->mem_handler;

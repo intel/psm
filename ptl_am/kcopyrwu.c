@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -56,7 +57,7 @@ int64_t kcopy_get(int fd, pid_t pid, const void *src, void *dst, int64_t n) {
 		.src = (uint64_t) (uintptr_t) src,
 		.dst = (uint64_t) (uintptr_t) dst
 	};
-	int ret;
+	int64_t ret;
 
 	ret = write(fd, &e, sizeof(e));
 	if (ret == sizeof(e))
@@ -75,7 +76,7 @@ int64_t kcopy_put(int fd, const void *src, pid_t pid, void *dst, int64_t n) {
 		.src = (uint64_t) (uintptr_t) src,
 		.dst = (uint64_t) (uintptr_t) dst
 	};
-	int ret;
+	int64_t ret;
 
 	ret = write(fd, &e, sizeof(e));
 	if (ret == sizeof(e))

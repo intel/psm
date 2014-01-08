@@ -128,6 +128,7 @@ ips_recvhdrq_init(const psmi_context_t *context,
     recvq->state->hdrq_head = 0;
     recvq->state->rcv_egr_index_head = NO_EAGER_UPDATE;
     recvq->state->num_hdrq_done = 0;
+    recvq->state->hdr_countdown = 0;
     
     {
       union psmi_envvar_val env_hdr_update;
@@ -161,6 +162,7 @@ ips_recvhdrq_fini(struct ips_recvhdrq *recvq)
 // that eager head wasn't advanced.
 //
 
+#if 0
 static void ips_flush_egrq_if_required(struct ips_recvhdrq *recvq)
 {
     const uint32_t tail = ips_recvq_tail_get(&recvq->egrq);
@@ -175,6 +177,7 @@ static void ips_flush_egrq_if_required(struct ips_recvhdrq *recvq)
     }
     return;
 }
+#endif
 
 /*
  * Helpers for ips_recvhdrq_progress.
@@ -370,8 +373,8 @@ do_pkt_cksum(struct ips_recvhdrq_event *rcv_ev)
     lcontext = 
       epstaddr ? epstaddr->ipsaddr->proto->epinfo.ep_context : -1;
     
-    hd = __ipath_rcvhdrhead[0];
-    tl = __ipath_rcvhdrhead[-2];
+    hd = rcv_ev->recvq->context->ctrl->__ipath_rcvhdrhead[0];
+    tl = rcv_ev->recvq->context->ctrl->__ipath_rcvhdrhead[-2];
     
     dest_subcontext = _get_proto_subcontext(rcv_ev->p_hdr);
     
@@ -446,7 +449,6 @@ ips_recvhdrq_progress(struct ips_recvhdrq *recvq)
     uint32_t num_hdrq_done = 0;
     const int num_hdrq_todo = recvq->hdrq.elemcnt;
     const uint32_t hdrq_elemsz = recvq->hdrq.elemsz;
-    unsigned etiderrs = 0;
     uint32_t dest_subcontext;
 
     int ret = IPS_RECVHDRQ_CONTINUE;
@@ -489,7 +491,8 @@ ips_recvhdrq_progress(struct ips_recvhdrq *recvq)
 	rcv_ev.epid   = ips_epid_from_phdr(lmc_mask, rcv_ev.p_hdr);
 	rcv_ev.has_cksum = 
 	  ((recvq->proto->flags & IPS_PROTO_FLAG_CKSUM) &&
-	   (rcv_ev.ptype == RCVHQ_RCV_TYPE_EAGER));
+	   (rcv_ev.ptype == RCVHQ_RCV_TYPE_EAGER) &&
+	   (rcv_ev.p_hdr->mqhdr != MQ_MSG_DATA_BLK));
 	
 	if_pt (recvq->proto->flags & IPS_PROTO_FLAG_CCA) {
 	  /* IBTA CCA handling:
@@ -544,7 +547,23 @@ ips_recvhdrq_progress(struct ips_recvhdrq *recvq)
 
 		if (rcv_ev.ptype == RCVHQ_RCV_TYPE_EAGER) {
 		    /* tiderr and eager, don't consider updating egr head */
-		    etiderrs++;
+		    if (state->hdr_countdown == 0 &&
+				state->rcv_egr_index_head == NO_EAGER_UPDATE) {
+			/* eager-full is not currently under tracing. */
+			uint32_t egr_cnt = recvq->egrq.elemcnt;
+			const uint32_t etail = ips_recvq_tail_get(&recvq->egrq);
+			const uint32_t ehead = ips_recvq_head_get(&recvq->egrq);
+
+			if (ehead == ((etail+1)%egr_cnt)) {
+			    /* eager is full, trace existing header entries */
+			    uint32_t hdr_size = recvq->hdrq_elemlast + hdrq_elemsz;
+			    const uint32_t htail = ips_recvq_tail_get(&recvq->hdrq);
+			    const uint32_t hhead = state->hdrq_head;
+
+			    state->hdr_countdown = (htail > hhead) ?
+				(htail - hhead) : (htail + hdr_size - hhead);
+			}
+		    }
 		    goto skip_packet_no_egr_update;
 		}
 	    }
@@ -569,6 +588,7 @@ ips_recvhdrq_progress(struct ips_recvhdrq *recvq)
 	    else {   
 	        rcv_ev.ipsaddr = epstaddr->ipsaddr;
 		ret = ips_proto_process_packet(&rcv_ev);
+		if (ret == IPS_RECVHDRQ_OOO) return PSM_OK_NO_PROGRESS;
 	    }
 	}
 	else {
@@ -590,8 +610,11 @@ skip_packet:
 	 *    an eager overflow
 	 */
 	if (has_optional_eagerbuf ? ipath_hdrget_use_egr_buf(rhf)
-			          : (rcv_ev.ptype == RCVHQ_RCV_TYPE_EAGER))
+			          : (rcv_ev.ptype == RCVHQ_RCV_TYPE_EAGER)) {
 	    state->rcv_egr_index_head = ipath_hdrget_index(rhf);
+	    /* a header entry is using an eager entry, stop tracing. */
+	    state->hdr_countdown = 0;
+	}
 
 skip_packet_no_egr_update:
         /* Note that state->hdrq_head is sampled speculatively by the code
@@ -622,14 +645,33 @@ skip_packet_no_egr_update:
 	      ips_recvq_head_update(&recvq->egrq, state->rcv_egr_index_head);
 	      state->rcv_egr_index_head = NO_EAGER_UPDATE;
 	    }
-	    else if (etiderrs) /* See comments in ips_flush_egrq_if_required() */
-		ips_flush_egrq_if_required(recvq);
 
 	    /* Process any pending acks while updated eager/headq queue */
 	    process_pending_acks(recvq);
 
 	    /* Reset header queue entries processed */
 	    state->num_hdrq_done = 0;
+	}
+
+	if (state->hdr_countdown > 0) {
+	    /* a header entry is consumed. */
+	    state->hdr_countdown -= hdrq_elemsz;
+	    if (state->hdr_countdown == 0) {
+		/* header entry count reaches zero. */
+		const uint32_t tail = ips_recvq_tail_get(&recvq->egrq);
+		const uint32_t head = ips_recvq_head_get(&recvq->egrq);
+		uint32_t egr_cnt = recvq->egrq.elemcnt;
+
+		/* Checks eager-full again. This is a real false-egr-full */
+		if (head == ((tail+1)%egr_cnt)) {
+		    ips_recvq_head_update(&recvq->egrq, tail);
+		    _IPATH_DBG("eager array full after overflow, flushing "
+				"(head %llx, tail %llx)\n",
+				(long long)head, (long long)tail);
+		    recvq->proto->stats.egr_overflow++;
+		} else
+		    _IPATH_ERROR("PSM BUG: EgrOverflow: eager queue is not full\n");
+	    }
 	}
     }
     /* while (hdrq_entries_to_read) */

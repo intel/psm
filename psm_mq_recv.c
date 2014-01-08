@@ -35,30 +35,61 @@
 #include "psm_user.h"
 #include "psm_mq_internal.h"
 
+#define psmi_mq_handle_egrdata(mq, req, epaddr) \
+    do { \
+	    psm_mq_req_t dreq, treq; \
+	    dreq = STAILQ_FIRST(&epaddr->mctxt_master->egrdata); \
+	    while (dreq) { \
+		treq = dreq; \
+		dreq = STAILQ_NEXT(dreq, nextq); \
+		if (treq->egrid.egr_data == req->egrid.egr_data) { \
+		    psmi_mq_handle_data(req, epaddr, treq->egrid.egr_data, \
+			treq->recv_msgoff, treq->buf, treq->recv_msglen); \
+		    psmi_mq_sysbuf_free(mq, treq->buf); \
+		    STAILQ_REMOVE(&epaddr->mctxt_master->egrdata, \
+			treq, psm_mq_req, nextq); \
+		    psmi_mq_req_free(treq); \
+		} \
+	    } \
+    } while (0)
+
 static void __recvpath
-psmi_mq_req_copy(psm_mq_req_t req, psm_epaddr_t epaddr, const void *buf, 
-		 uint32_t nbytes)
+psmi_mq_req_copy(psm_mq_req_t req, psm_epaddr_t epaddr,
+		uint32_t offset, const void *buf, uint32_t nbytes)
 {
     // recv_msglen may be changed by unexpected receive buf.
-    uint32_t msglen_left = req->recv_msglen - req->recv_msgoff;
-    uint32_t msglen_this = min(msglen_left, nbytes);
-    uint8_t *msgptr = (uint8_t *)req->buf + req->recv_msgoff;
+    uint32_t msglen_this, end;
+    uint8_t *msgptr = (uint8_t *)req->buf + offset;
     
+    end = offset + nbytes;
+    if (end > req->recv_msglen) {
+	if (offset >= req->recv_msglen) msglen_this = 0;
+	else msglen_this = req->recv_msglen - offset;
+    } else {
+	msglen_this = nbytes;
+    }
+
     VALGRIND_MAKE_MEM_DEFINED(msgptr, msglen_this);
     psmi_mq_mtucpy(msgptr, buf, msglen_this);
     
-    req->recv_msgoff += msglen_this;
+    if (req->recv_msgoff < end) {
+	req->recv_msgoff = end;
+    }
     req->send_msgoff += nbytes;
     return;
 }
 
 int __recvpath
-psmi_mq_handle_data(psm_mq_req_t req, psm_epaddr_t epaddr, 
+psmi_mq_handle_data(psm_mq_req_t req, psm_epaddr_t epaddr,
+		    uint32_t egrid, uint32_t offset,
 		    const void *buf, uint32_t nbytes)
 {
-    psm_mq_t mq = req->mq;
+    psm_mq_t mq;
     int rc;
     
+    if (req == NULL) goto no_req;
+
+    mq = req->mq;
     if (req->state == MQ_STATE_MATCHED)
 	rc = MQ_RET_MATCH_OK;
     else {
@@ -66,27 +97,15 @@ psmi_mq_handle_data(psm_mq_req_t req, psm_epaddr_t epaddr,
 	rc = MQ_RET_UNEXP_OK;
     }
 
-    psmi_mq_req_copy(req, epaddr, buf, nbytes);
+    psmi_assert(req->egrid.egr_data == egrid);
+    psmi_mq_req_copy(req, epaddr, offset, buf, nbytes);
 
     if (req->send_msgoff == req->send_msglen) {
 	if (req->type & MQE_TYPE_EGRLONG) {
-	    int flowid = req->egrid.egr_flowid;
-	    psmi_assert(STAILQ_FIRST(&epaddr->egrlong[flowid]) == req);
-	    STAILQ_REMOVE_HEAD(&epaddr->egrlong[flowid], nextq);
+	    STAILQ_REMOVE(&epaddr->mctxt_master->egrlong,
+				req, psm_mq_req, nextq);
 	}
 	    
-	/* Whatever is leftover in the posted message should be now marked as
-	 * undefined.
-	 * XXX Sends not supported yet.
-	 */
-#if 0
-#ifdef PSM_VALGRIND
-	if (req->send_msglen < req->buf_len)
-	    VALGRIND_MAKE_MEM_UNDEFINED(
-		(void *) ((uintptr_t) req->buf + req->send_msglen), 
-		req->buf_len - req->send_msglen);
-#endif
-#endif
 	if (req->state == MQ_STATE_MATCHED) {
 	    req->state = MQ_STATE_COMPLETE;
 	    mq_qq_append(&mq->completed_q, req);
@@ -100,6 +119,21 @@ psmi_mq_handle_data(psm_mq_req_t req, psm_epaddr_t epaddr,
     }
 
     return rc;
+
+no_req:
+    mq = epaddr->ep->mq;
+    req = psmi_mq_req_alloc(mq, MQE_TYPE_RECV);
+    psmi_assert(req != NULL);
+
+    req->egrid.egr_data = egrid;
+    req->recv_msgoff = offset;
+    req->recv_msglen = nbytes;
+    req->buf = psmi_mq_sysbuf_alloc(mq, nbytes);
+    psmi_mq_mtucpy(req->buf, buf, nbytes);
+
+    STAILQ_INSERT_TAIL(&epaddr->mctxt_master->egrdata, req, nextq);
+
+    return MQ_RET_UNEXP_OK;
 }
 
 int __recvpath
@@ -117,10 +151,9 @@ psmi_mq_handle_rts(psm_mq_t mq, uint64_t tag,
 
     if (req) { /* we have a match, no need to callback */
 	(void)mq_set_msglen(req, req->buf_len, send_msglen);
-	req->type = MQE_TYPE_RECV;
 	req->state = MQ_STATE_MATCHED;
 	req->tag = tag;
-	req->recv_msgoff = 0;
+	req->send_msgoff = 0;
 	req->rts_peer = peer;
 	req->rts_sbuf = send_buf;
 	*req_o = req; /* yes match */
@@ -129,8 +162,6 @@ psmi_mq_handle_rts(psm_mq_t mq, uint64_t tag,
     else { /* No match, keep track of callback */
 	req = psmi_mq_req_alloc(mq, MQE_TYPE_RECV);
 	psmi_assert(req != NULL);
-
-	req->type = MQE_TYPE_RECV;
 	/* We don't know recv_msglen yet but we set it here for
 	 * mq_iprobe */
 	req->send_msglen = req->recv_msglen = send_msglen;
@@ -138,6 +169,7 @@ psmi_mq_handle_rts(psm_mq_t mq, uint64_t tag,
 	req->tag = tag;
 	req->rts_callback = cb;
 	req->recv_msgoff = 0;
+	req->send_msgoff = 0;
 	req->rts_peer = peer;
 	req->rts_sbuf = send_buf;
 	mq_sq_append(&mq->unexpected_q, req);
@@ -242,10 +274,13 @@ psmi_mq_handle_envelope_unexpected(
 	    req->buf = psmi_mq_sysbuf_alloc(mq, msglen);
 	    req->state = MQ_STATE_UNEXP;
 	    req->type |= MQE_TYPE_EGRLONG;
-	    STAILQ_INSERT_TAIL(&epaddr->egrlong[egrid.egr_flowid], req, nextq);
+	    STAILQ_INSERT_TAIL(&epaddr->mctxt_master->egrlong, req, nextq);
 	    _IPATH_VDBG("unexp MSG_LONG %d of length %d bytes pay=%d\n", 
 			egrid.egr_msgno, msglen, paylen);
-	    psmi_mq_handle_data(req, epaddr, payload, paylen);
+	    if (paylen > 0)
+		psmi_mq_handle_data(req, epaddr,
+			egrid.egr_data, 0, payload, paylen);
+	    psmi_mq_handle_egrdata(mq, req, epaddr);
 	    break;
 
 	default:
@@ -304,10 +339,13 @@ psmi_mq_handle_envelope(psm_mq_t mq, uint16_t mode, psm_epaddr_t epaddr,
 		req->state = MQ_STATE_MATCHED;
 		req->type |= MQE_TYPE_EGRLONG;
 		req->send_msgoff = req->recv_msgoff = 0;
-		STAILQ_INSERT_TAIL(&epaddr->egrlong[egrid.egr_flowid], req, nextq);
+		STAILQ_INSERT_TAIL(&epaddr->mctxt_master->egrlong, req, nextq);
 		_IPATH_VDBG("exp MSG_LONG %d of length %d bytes pay=%d\n", 
 			egrid.egr_msgno, msglen, paylen);
-		psmi_mq_handle_data(req, epaddr, payload, paylen);
+		if (paylen > 0)
+		    psmi_mq_handle_data(req, epaddr,
+			egrid.egr_data, 0, payload, paylen);
+		psmi_mq_handle_egrdata(mq, req, epaddr);
 		break;
 
 	    default:
@@ -328,3 +366,181 @@ psmi_mq_handle_envelope(psm_mq_t mq, uint16_t mode, psm_epaddr_t epaddr,
 
     return rc;
 }
+
+/*
+ * Note, epaddr is the master.
+ */
+int __recvpath
+psmi_mq_handle_outoforder_queue(psm_epaddr_t epaddr)
+{
+    psm_mq_t mq = epaddr->ep->mq;
+    psm_mq_req_t ureq, ereq;
+    uint32_t msglen;
+
+    next_ooo:
+    ureq = mq_ooo_match(&epaddr->outoforder_q, epaddr->mctxt_recv_seqnum);
+    if (ureq == NULL) return 0;
+    epaddr->mctxt_recv_seqnum++;
+    epaddr->outoforder_c--;
+
+    ereq = mq_req_match(&(mq->expected_q), ureq->tag, 1);
+    if (ereq == NULL) {
+	mq_sq_append(&mq->unexpected_q, ureq);
+	if (epaddr->outoforder_c) goto next_ooo;
+	return 0;
+    }
+
+    psmi_assert(MQE_TYPE_IS_RECV(ereq->type));
+    ereq->tag = ureq->tag;
+    msglen = mq_set_msglen(ereq, ereq->buf_len, ureq->send_msglen);
+
+    switch (ureq->state) {
+    case MQ_STATE_COMPLETE:
+	if (ureq->buf != NULL) { /* 0-byte don't alloc a sysbuf */
+	    psmi_mq_mtucpy(ereq->buf,
+		(const void *)ureq->buf, msglen);
+	    psmi_mq_sysbuf_free(mq, ureq->buf);
+	}
+	ereq->state = MQ_STATE_COMPLETE;
+	mq_qq_append(&mq->completed_q, ereq);
+	break;
+    case MQ_STATE_UNEXP: /* not done yet */
+	ereq->type = ureq->type;
+	ereq->egrid = ureq->egrid;
+	ereq->epaddr = ureq->epaddr;
+	ereq->send_msgoff = ureq->send_msgoff;
+	ereq->recv_msgoff = min(ureq->recv_msgoff, msglen);
+	psmi_mq_mtucpy(ereq->buf,
+	    (const void *)ureq->buf, ereq->recv_msgoff);
+	psmi_mq_sysbuf_free(mq, ureq->buf);
+	ereq->state = MQ_STATE_MATCHED;
+	STAILQ_INSERT_AFTER(&ureq->epaddr->mctxt_master->egrlong,
+			ureq, ereq, nextq);
+	STAILQ_REMOVE(&ureq->epaddr->mctxt_master->egrlong,
+			ureq, psm_mq_req, nextq);
+	break;
+    case MQ_STATE_UNEXP_RV: /* rendez-vous ... */
+	ereq->state = MQ_STATE_MATCHED;
+	ereq->rts_peer = ureq->rts_peer;
+	ereq->rts_sbuf = ureq->rts_sbuf;
+	ereq->send_msgoff = 0;
+	ereq->rts_callback = ureq->rts_callback;
+	ereq->rts_reqidx_peer = ureq->rts_reqidx_peer;
+	ereq->type = ureq->type;
+	ereq->rts_callback(ereq, 0);
+	break;
+    default:
+	fprintf(stderr, "Unexpected state %d in req %p\n", ureq->state, ureq);
+	fprintf(stderr, "type=%d, mq=%p, tag=%p\n",
+			ureq->type, ureq->mq, (void *)(uintptr_t)ureq->tag);
+	abort();
+    }
+
+    psmi_mq_req_free(ureq);
+    if (epaddr->outoforder_c) goto next_ooo;
+    return 0;
+}
+
+int __recvpath
+psmi_mq_handle_envelope_outoforder(psm_mq_t mq, uint16_t mode,
+		   psm_epaddr_t epaddr, uint16_t msg_seqnum,
+		   uint64_t tag, psmi_egrid_t egrid, uint32_t send_msglen, 
+		   const void *payload, uint32_t paylen)
+{
+    psm_mq_req_t req;
+    uint32_t msglen;
+
+    req = psmi_mq_req_alloc(mq, MQE_TYPE_RECV);
+    psmi_assert(req != NULL);
+
+    req->tag = tag;
+    req->recv_msgoff = 0;
+    req->recv_msglen = req->send_msglen = req->buf_len = msglen = send_msglen;
+
+    _IPATH_VDBG(
+		"from=%s match=NO (req=%p) mode=%x mqtag=%" PRIx64
+		" send_msglen=%d\n", psmi_epaddr_get_name(epaddr->epid), 
+		req, mode, tag, send_msglen);
+    switch (mode) {
+	case MQ_MSG_TINY:
+	    if (msglen > 0) {
+		req->buf = psmi_mq_sysbuf_alloc(mq, msglen);
+		mq_copy_tiny((uint32_t *)req->buf, (uint32_t *)payload, msglen);
+	    }
+	    else
+		req->buf = NULL;
+	    req->state = MQ_STATE_COMPLETE;
+	    break;
+
+	case MQ_MSG_SHORT:
+	    req->buf = psmi_mq_sysbuf_alloc(mq, msglen);
+	    psmi_mq_mtucpy(req->buf, payload, msglen);
+	    req->state = MQ_STATE_COMPLETE;
+	    break;
+
+	case MQ_MSG_LONG:
+	    req->egrid = egrid;
+	    req->epaddr = epaddr;
+	    req->send_msgoff = 0;
+	    req->buf = psmi_mq_sysbuf_alloc(mq, msglen);
+	    req->state = MQ_STATE_UNEXP;
+	    req->type |= MQE_TYPE_EGRLONG;
+	    STAILQ_INSERT_TAIL(&epaddr->mctxt_master->egrlong, req, nextq);
+	    _IPATH_VDBG("unexp MSG_LONG %d of length %d bytes pay=%d\n", 
+			egrid.egr_msgno, msglen, paylen);
+	    if (paylen > 0)
+		psmi_mq_handle_data(req, epaddr,
+			egrid.egr_data, 0, payload, paylen);
+	    psmi_mq_handle_egrdata(mq, req, epaddr);
+	    break;
+
+	default:
+	    psmi_handle_error(PSMI_EP_NORETURN, PSM_INTERNAL_ERR,
+			    "Internal error, unknown packet 0x%x", mode);
+    }
+
+    req->msg_seqnum = msg_seqnum;
+    mq_sq_append(&epaddr->mctxt_master->outoforder_q, req);
+    epaddr->mctxt_master->outoforder_c++;
+    mq->stats.rx_sys_bytes += msglen;
+    mq->stats.rx_sys_num++;
+
+    return MQ_RET_UNEXP_OK;
+}
+
+int __recvpath
+psmi_mq_handle_rts_outoforder(psm_mq_t mq, uint64_t tag, 
+		   uintptr_t send_buf, uint32_t send_msglen, 
+		   psm_epaddr_t peer, uint16_t msg_seqnum,
+		   mq_rts_callback_fn_t cb, 
+		   psm_mq_req_t *req_o)
+{
+    psm_mq_req_t req;
+
+    PSMI_PLOCK_ASSERT();
+
+    req = psmi_mq_req_alloc(mq, MQE_TYPE_RECV);
+    psmi_assert(req != NULL);
+
+    /* We don't know recv_msglen yet but we set it here for
+     * mq_iprobe */
+    req->send_msglen = req->recv_msglen = send_msglen;
+    req->state = MQ_STATE_UNEXP_RV;
+    req->tag = tag;
+    req->rts_callback = cb;
+    req->recv_msgoff = 0;
+    req->send_msgoff = 0;
+    req->rts_peer = peer;
+    req->rts_sbuf = send_buf;
+    req->msg_seqnum = msg_seqnum;
+    mq_sq_append(&peer->mctxt_master->outoforder_q, req);
+    peer->mctxt_master->outoforder_c++;
+    *req_o = req; /* no match, will callback */
+
+    _IPATH_VDBG("from=%s match=%s (req=%p) mqtag=%" PRIx64" recvlen=%d "
+		"sendlen=%d errcode=%d\n", psmi_epaddr_get_name(peer->epid), 
+		"NO", req, req->tag, 
+		req->recv_msglen, req->send_msglen, req->error_code);
+    return MQ_RET_UNEXP_OK;
+}
+

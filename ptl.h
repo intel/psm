@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -149,9 +150,9 @@ struct ptl_ctl
 				 uint64_t timeout_ns);
 
     /* MQ stuff */
-    psm_error_t (*mq_send)(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t dest, 
+    psm_error_t (*mq_send)(psm_mq_t mq, psm_epaddr_t dest, 
 		           uint32_t flags, uint64_t stag, const void *buf, uint32_t len);
-    psm_error_t (*mq_isend)(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t dest, 
+    psm_error_t (*mq_isend)(psm_mq_t mq, psm_epaddr_t dest, 
 			    uint32_t flags, uint64_t stag, const void *buf, uint32_t len, 
 			    void *ctxt, psm_mq_req_t *req);
 
@@ -161,7 +162,7 @@ struct ptl_ctl
 
     /* AM stuff, only for Active messages PTL.  Eventually we will expose
      * this to PSM clients. */
-    psm_error_t (*am_short_request)(ptl_t *ptl, psm_epaddr_t epaddr, 
+    psm_error_t (*am_short_request)(psm_epaddr_t epaddr, 
                         psm_handler_t handler, psm_amarg_t *args, int nargs,
 			void *src, size_t len, int flags, 
 			psm_am_completion_fn_t completion_fn, 
@@ -171,7 +172,7 @@ struct ptl_ctl
 				  void *src, size_t len, int flags,
 				  psm_am_completion_fn_t completion_fn,
 				  void *completion_ctxt);
-    psm_error_t (*am_long_request)(psm_ep_t ep, psm_epaddr_t epaddr,
+    psm_error_t (*am_long_request)(psm_epaddr_t epaddr,
                         psm_handler_t handler, psm_amarg_t *args, int nargs,
 		        void *src, size_t len, void *dest, int flags);
     psm_error_t (*am_long_reply)(psm_am_token_t token, psm_handler_t handler, 

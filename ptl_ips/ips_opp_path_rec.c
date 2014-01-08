@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -40,23 +41,6 @@
 #define DF_OPP_LIBRARY "libofedplus.so"
 #define DATA_VFABRIC_OFFSET 8
 
-extern uint8_t ips_ipd_delay[IBTA_RATE_120_GBPS + 1];
-extern struct hsearch_data ips_path_rec_hash;
-
-struct opp_api {
-  void* (*op_path_find_hca)(const char*name, void **device);
-  void* (*op_path_open)(void *device, int port_num);
-  void (*op_path_close)(void *context);
-  int (*op_path_get_path_by_rec)(void *context, ibta_path_rec_t *query, ibta_path_rec_t *response);
-  /* TODO: Need symbol to ibv_close_device. */
-};
-
-static void* opp_lib = NULL;
-static void *hndl = NULL;
-static void *device = NULL;
-static void *opp_ctxt = NULL;
-static struct opp_api opp_fn = {};
-
 /* SLID and DLID are in network byte order */
 static psm_error_t
 ips_opp_get_path_rec(ips_path_type_t type, struct ips_proto *proto,
@@ -92,7 +76,7 @@ ips_opp_get_path_rec(ips_path_type_t type, struct ips_proto *proto,
 
   snprintf(eplid, sizeof(eplid), "%s_%x_%x", (type == IPS_PATH_HIGH_PRIORITY) ? "HIGH" : "LOW", query.slid,query.dlid);
   elid.key = eplid;
-  hsearch_r(elid, FIND, &epath, &ips_path_rec_hash);
+  hsearch_r(elid, FIND, &epath, &proto->ips_path_rec_hash);
 
   if (!epath) { /* Unable to find path record in cache */
     elid.key = psmi_calloc(proto->ep, UNDEFINED, 1, strlen(eplid) + 1);
@@ -100,7 +84,7 @@ ips_opp_get_path_rec(ips_path_type_t type, struct ips_proto *proto,
       psmi_calloc(proto->ep, UNDEFINED, 1, sizeof(ips_opp_path_rec_t));
     
     /* Get path record between local LID and remote */
-    opp_err = opp_fn.op_path_get_path_by_rec(opp_ctxt, &query,
+    opp_err = proto->opp_fn.op_path_get_path_by_rec(proto->opp_ctxt, &query,
 					     &opp_path_rec->opp_response);
     if (opp_err || !elid.key) {
       psmi_free(opp_path_rec);
@@ -118,7 +102,7 @@ ips_opp_get_path_rec(ips_path_type_t type, struct ips_proto *proto,
     opp_path_rec->ips.epr_sl = ntohs(opp_path_rec->opp_response.qos_class_sl);
     opp_path_rec->ips.epr_static_rate = opp_path_rec->opp_response.rate & 0x3f;
     opp_path_rec->ips.epr_static_ipd = 
-      ips_ipd_delay[opp_path_rec->ips.epr_static_rate];
+      proto->ips_ipd_delay[opp_path_rec->ips.epr_static_rate];
     
     /* Setup CCA parameters for path */
     if (opp_path_rec->ips.epr_sl > 15) {
@@ -162,7 +146,7 @@ ips_opp_get_path_rec(ips_path_type_t type, struct ips_proto *proto,
     /* Add path record into cache */
     strcpy(elid.key, eplid);
     elid.data = (void*) opp_path_rec;
-    hsearch_r(elid, ENTER, &epath, &ips_path_rec_hash);
+    hsearch_r(elid, ENTER, &epath, &proto->ips_path_rec_hash);
   }
   else /* Path record found in cache */
     opp_path_rec = (ips_opp_path_rec_t*) epath->data;
@@ -366,12 +350,12 @@ ips_opp_path_rec(struct ips_proto *proto,
   return err;
 }
 
-static psm_error_t ips_opp_fini()
+static psm_error_t ips_opp_fini(struct ips_proto *proto)
 {
   psm_error_t err = PSM_OK;
   
-  if (opp_lib)
-    dlclose(opp_lib);
+  if (proto->opp_lib)
+    dlclose(proto->opp_lib);
   
   return err;  
 }
@@ -382,21 +366,21 @@ psm_error_t ips_opp_init(struct ips_proto *proto)
   struct ipath_base_info *base_info = &proto->ep->context.base_info;
   char hcaName[32];
 
-  opp_lib = dlopen(DF_OPP_LIBRARY, RTLD_NOW);
-  if (!opp_lib) {
+  proto->opp_lib = dlopen(DF_OPP_LIBRARY, RTLD_NOW);
+  if (!proto->opp_lib) {
     _IPATH_ERROR("Unable to open OFED Plus Plus library %s. Error: %s\n", DF_OPP_LIBRARY, dlerror());
     goto fail;
   }
   
   /* Resolve symbols that we require within opp library */
-  opp_fn.op_path_find_hca = dlsym(opp_lib, "op_path_find_hca");
-  opp_fn.op_path_open = dlsym(opp_lib, "op_path_open");
-  opp_fn.op_path_close = dlsym(opp_lib, "op_path_close");
-  opp_fn. op_path_get_path_by_rec = dlsym(opp_lib, "op_path_get_path_by_rec");
+  proto->opp_fn.op_path_find_hca = dlsym(proto->opp_lib, "op_path_find_hca");
+  proto->opp_fn.op_path_open = dlsym(proto->opp_lib, "op_path_open");
+  proto->opp_fn.op_path_close = dlsym(proto->opp_lib, "op_path_close");
+  proto->opp_fn. op_path_get_path_by_rec = dlsym(proto->opp_lib, "op_path_get_path_by_rec");
   
   /* If we can't resovle any symbol then fail to load opp module */  
-  if (!opp_fn.op_path_find_hca || !opp_fn.op_path_open || !opp_fn.op_path_close
-      || !opp_fn.op_path_get_path_by_rec) {
+  if (!proto->opp_fn.op_path_find_hca || !proto->opp_fn.op_path_open ||
+  !proto->opp_fn.op_path_close || !proto->opp_fn.op_path_get_path_by_rec) {
     _IPATH_PRDBG("Unable to resolve symbols in OPP library. Unloading.\n");
     goto fail;
   }
@@ -406,21 +390,21 @@ psm_error_t ips_opp_init(struct ips_proto *proto)
     Dl_info info_opp;
     _IPATH_INFO("PSM path record queries using OFED Plus Plus (%s) from %s\n", 
 		DF_OPP_LIBRARY,
-		dladdr(opp_fn.op_path_open, &info_opp) ? info_opp.dli_fname : 
+		dladdr(proto->opp_fn.op_path_open, &info_opp) ? info_opp.dli_fname : 
 		"Unknown/unsupported version of OPP library found!");
   }
 
   /* Obtain handle to hca (requires verbs on node) */
   snprintf(hcaName, sizeof(hcaName), "qib%d", base_info->spi_unit);
-  hndl = opp_fn.op_path_find_hca(hcaName, &device);
-  if (!hndl) {
+  proto->hndl = proto->opp_fn.op_path_find_hca(hcaName, &proto->device);
+  if (!proto->hndl) {
     _IPATH_ERROR("OPP: Unable to find HCA %s. Disabling OPP interface for path record queries.\n", hcaName);
     goto fail;
   }
   
   /* Get OPP context */
-  opp_ctxt = opp_fn.op_path_open(device, base_info->spi_port);
-  if (!opp_ctxt) {
+  proto->opp_ctxt = proto->opp_fn.op_path_open(proto->device, base_info->spi_port);
+  if (!proto->opp_ctxt) {
     _IPATH_ERROR("OPP: Unable to optain OPP context. Disabling OPP interface for path record queries.\n");
     goto fail;
   }
@@ -434,15 +418,15 @@ psm_error_t ips_opp_init(struct ips_proto *proto)
   
  fail:
   _IPATH_ERROR("Make sure SM is running...\n");
-  _IPATH_ERROR("Make sure service qlogic_sa is running...\n");
-  _IPATH_ERROR("to start qlogic_sa: service qlogic_sa start\n");
-  _IPATH_ERROR("or enable it at boot time: iba_config -E qlogic_sa\n\n");
+  _IPATH_ERROR("Make sure service dist_sa is running...\n");
+  _IPATH_ERROR("to start dist_sa: service dist_sa start\n");
+  _IPATH_ERROR("or enable it at boot time: iba_config -E dist_sa\n\n");
 
   err = psmi_handle_error(NULL, PSM_EPID_PATH_RESOLUTION,
 			  "Unable to initialize OFED Plus library successfully.\n");
 
-  if (opp_lib)
-    dlclose(opp_lib);
+  if (proto->opp_lib)
+    dlclose(proto->opp_lib);
   
   return err;
 }

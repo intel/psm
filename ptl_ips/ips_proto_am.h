@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -55,7 +56,7 @@ ips_am_short_reply(psm_am_token_t tok,
 		   void *completion_ctxt);
 
 psm_error_t
-ips_am_short_request(ptl_t *ptl, psm_epaddr_t epaddr, 
+ips_am_short_request(psm_epaddr_t epaddr, 
                      psm_handler_t handler, psm_amarg_t *args, int nargs,
 		     void *src, size_t len, int flags,
 		     psm_am_completion_fn_t completion_fn, 

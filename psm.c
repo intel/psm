@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -83,6 +84,15 @@ psmi_verno_isinteroperable(uint16_t verno)
     int iscompat = -1;
 
     switch (psmi_verno) {
+       case 0x010f:
+	 /* Multi-rail is supported in this version, since the packet header
+	  * sequence number is shrunk from 24bits to 16bits, old version
+	  * can not process such packet. The freed 8bits and another 8bits
+	  * are used to form the message sequence number to keep message order
+	  * in multi-rail case.
+	  */
+	    iscompat = (verno >= 0x010f);
+	    break;
        case 0x010e:
 	 /* Allow specification of send buffer descriptors in addition to send
 	  * network buffers for IPS. Having a large number of send descriptors
@@ -268,14 +278,17 @@ __psm_finalize(void)
 {
     struct psmi_eptab_iterator itor;
     char *hostname;
+    psm_ep_t ep;
     extern psm_ep_t psmi_opened_endpoint; /* in psm_endpoint.c */
 
     PSMI_ERR_UNLESS_INITIALIZED(NULL);
 
-    if (psmi_opened_endpoint != NULL) {
-	psm_ep_close(psmi_opened_endpoint, PSM_EP_CLOSE_GRACEFUL,
+    ep = psmi_opened_endpoint;
+    while (ep != NULL) {
+	psmi_opened_endpoint = ep->user_ep_next;
+	psm_ep_close(ep, PSM_EP_CLOSE_GRACEFUL,
 	    2*PSMI_MIN_EP_CLOSE_TIMEOUT);
-	psmi_opened_endpoint = NULL;
+	ep = psmi_opened_endpoint;
     }
 
     psmi_epid_fini();
@@ -425,11 +438,14 @@ psm_error_t __recvpath
 __psm_poll(psm_ep_t ep)
 {
     psm_error_t err1 = PSM_OK, err2 = PSM_OK;
+    psm_ep_t tmp;
 
     PSMI_ASSERT_INITIALIZED();
 
     PSMI_PLOCK();
 
+    tmp = ep;
+    do {
     err1 = ep->ptl_amsh.ep_poll(ep->ptl_amsh.ptl, 0); /* poll reqs & reps */
     if (err1 > PSM_OK_NO_PROGRESS) { /* some error unrelated to polling */
 	PSMI_PUNLOCK();
@@ -441,6 +457,8 @@ __psm_poll(psm_ep_t ep)
 	PSMI_PUNLOCK();
 	return err2;
     }
+    ep = ep->mctxt_next;
+    } while (ep != tmp);
 
     /* This is valid because..
      * PSM_OK & PSM_OK_NO_PROGRESS => PSM_OK
@@ -457,9 +475,12 @@ __psmi_poll_internal(psm_ep_t ep, int poll_amsh)
 {
     psm_error_t err1 = PSM_OK_NO_PROGRESS;
     psm_error_t err2;
+    psm_ep_t tmp;
 
     PSMI_PLOCK_ASSERT();
 
+    tmp = ep;
+    do {
     if (poll_amsh) {
 	err1 = ep->ptl_amsh.ep_poll(ep->ptl_amsh.ptl, 0); /* poll reqs & reps */
 	if (err1 > PSM_OK_NO_PROGRESS) /* some error unrelated to polling */
@@ -467,9 +488,13 @@ __psmi_poll_internal(psm_ep_t ep, int poll_amsh)
     }
 
     err2 = ep->ptl_ips.ep_poll(ep->ptl_ips.ptl, 0); /* get into ips_do_work */
-    if (err2 != PSM_OK_NO_PROGRESS) /* some error unrelated to polling */
-	err1 = err2;
-    return err1;
+    if (err2 > PSM_OK_NO_PROGRESS) /* some error unrelated to polling */
+	return err2;
+
+    ep = ep->mctxt_next;
+    } while (ep != tmp);
+
+    return (err1 & err2);
 }
 PSMI_API_DECL(psmi_poll_internal)
 

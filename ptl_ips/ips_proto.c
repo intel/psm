@@ -51,20 +51,6 @@ static uint32_t host_ipv4addr = 0;  /* be */
 static uint32_t host_pid = 0;	    /* be */
 
 /*
- * Control message queue for pending messages.
- *
- * Control messages are queued as pending when no PIO is available for sending
- * the message.  They are composed on the fly and do not need buffering. 
- *
- * Variables here are write once (at init) and read afterwards (except the msg
- * queue overflow counters).
- */
-static uint32_t ctrl_msg_queue_overflow;
-static uint32_t ctrl_msg_queue_never_enqueue;
-static uint32_t message_type_to_index[256];
-#define message_type2index(msg_type) (message_type_to_index[(msg_type)] & ~CTRL_MSG_QUEUE_ALWAYS)
-
-/*
  * Control message types have their own flag to determine whether a message of
  * that type is queued or not.  These flags are kept in a state bitfield.
  */
@@ -105,7 +91,6 @@ ips_proto_init(const psmi_context_t *context, const ptl_t *ptl,
 	       struct ips_proto *proto)
 {
     const struct ipath_base_info *base_info = &context->base_info;
-    static int init_once = 0;
     uint32_t protoexp_flags, cksum_sz = 0;
     union psmi_envvar_val env_tid, env_cksum, env_mtu;
     psm_error_t err = PSM_OK;
@@ -191,11 +176,18 @@ ips_proto_init(const psmi_context_t *context, const ptl_t *ptl,
     proto->t_init	     = get_cycles();
     proto->t_fini	     = 0;
     proto->flags             = env_cksum.e_uint ? 
-      IPS_PROTO_FLAG_CKSUM : 0;
+				      IPS_PROTO_FLAG_CKSUM : 0;
 
     proto->num_connected_to   = 0;
     proto->num_connected_from = 0;
     proto->num_disconnect_requests = 0;
+    proto->stray_warn_interval = (uint64_t) -1;
+    proto->done_warning = 0;
+    proto->done_once = 0;
+    proto->num_bogus_warnings = 0;
+    proto->psmi_logevent_tid_send_reqs.interval_secs = 15;
+    proto->psmi_logevent_tid_send_reqs.next_warning = 0;
+    proto->psmi_logevent_tid_send_reqs.count = 0;
     
     /* Initialize IBTA related stuff (path record, SL2VL, CCA etc.) */
     if ((err = ips_ibta_init(proto)))
@@ -432,9 +424,8 @@ ips_proto_init(const psmi_context_t *context, const ptl_t *ptl,
 				 imm_size, &proto->proto_am)))
 	goto fail;
 
-    if (!init_once) {
+    if (!host_pid) {
 	char ipbuf[INET_ADDRSTRLEN], *p;
-	init_once = 1;
 	host_pid = (uint32_t) getpid();
 	host_ipv4addr = psmi_get_ipv4addr(); /* already be */
 	if (host_ipv4addr == 0) {
@@ -554,6 +545,7 @@ ips_proto_fini(struct ips_proto *proto, int force, uint64_t timeout_in)
 		mask[i] = 1;
                 epaddr_array[i] = epaddr;
                 i++;
+		PSM_MCTXT_REMOVE(epaddr);
             }
         }
 	psmi_epid_itor_fini(&itor);
@@ -717,27 +709,26 @@ ctrlq_init(struct ips_ctrlq *ctrlq, int flowid, struct ips_proto *proto)
 {
     // clear the ctrl send queue
     memset(ctrlq, 0, sizeof(*ctrlq));
-    memset(message_type_to_index, 0, sizeof(message_type_to_index));
 
-    message_type_to_index[OPCODE_ACK] = CTRL_MSG_ACK_QUEUED;
-    message_type_to_index[OPCODE_NAK] = CTRL_MSG_NAK_QUEUED;
-    message_type_to_index[OPCODE_ERR_CHK] = CTRL_MSG_ERR_CHK_QUEUED;
-    message_type_to_index[OPCODE_ERR_CHK_PLS] = CTRL_MSG_ERR_CHK_PLS_QUEUED;
-    message_type_to_index[OPCODE_CONNECT_REQUEST] = 
+    proto->message_type_to_index[OPCODE_ACK] = CTRL_MSG_ACK_QUEUED;
+    proto->message_type_to_index[OPCODE_NAK] = CTRL_MSG_NAK_QUEUED;
+    proto->message_type_to_index[OPCODE_ERR_CHK] = CTRL_MSG_ERR_CHK_QUEUED;
+    proto->message_type_to_index[OPCODE_ERR_CHK_PLS] = CTRL_MSG_ERR_CHK_PLS_QUEUED;
+    proto->message_type_to_index[OPCODE_CONNECT_REQUEST] = 
 		CTRL_MSG_CONNECT_REQUEST_QUEUED;
-    message_type_to_index[OPCODE_CONNECT_REPLY] = 
+    proto->message_type_to_index[OPCODE_CONNECT_REPLY] = 
 		CTRL_MSG_CONNECT_REPLY_QUEUED;
-    message_type_to_index[OPCODE_DISCONNECT_REQUEST] = 
+    proto->message_type_to_index[OPCODE_DISCONNECT_REQUEST] = 
 		CTRL_MSG_DISCONNECT_REQUEST_QUEUED;
-    message_type_to_index[OPCODE_DISCONNECT_REPLY] = 
+    proto->message_type_to_index[OPCODE_DISCONNECT_REPLY] = 
 		CTRL_MSG_DISCONNECT_REPLY_QUEUED;
-    message_type_to_index[OPCODE_CLOSE] = CTRL_MSG_CLOSE_QUEUED;
-    message_type_to_index[OPCODE_CLOSE_ACK] = CTRL_MSG_CLOSE_ACK_QUEUED;
-    message_type_to_index[OPCODE_ABORT] = CTRL_MSG_ABORT_QUEUED;
-    message_type_to_index[OPCODE_TIDS_GRANT] = CTRL_MSG_TIDS_GRANT_QUEUED;
-    message_type_to_index[OPCODE_TIDS_GRANT_ACK] = CTRL_MSG_TIDS_GRANT_ACK_QUEUED;
-    message_type_to_index[OPCODE_ERR_CHK_GEN] = CTRL_MSG_ERR_CHK_GEN_QUEUED;
-    message_type_to_index[OPCODE_FLOW_CCA_BECN] = CTRL_MSG_FLOW_CCA_BECN;
+    proto->message_type_to_index[OPCODE_CLOSE] = CTRL_MSG_CLOSE_QUEUED;
+    proto->message_type_to_index[OPCODE_CLOSE_ACK] = CTRL_MSG_CLOSE_ACK_QUEUED;
+    proto->message_type_to_index[OPCODE_ABORT] = CTRL_MSG_ABORT_QUEUED;
+    proto->message_type_to_index[OPCODE_TIDS_GRANT] = CTRL_MSG_TIDS_GRANT_QUEUED;
+    proto->message_type_to_index[OPCODE_TIDS_GRANT_ACK] = CTRL_MSG_TIDS_GRANT_ACK_QUEUED;
+    proto->message_type_to_index[OPCODE_ERR_CHK_GEN] = CTRL_MSG_ERR_CHK_GEN_QUEUED;
+    proto->message_type_to_index[OPCODE_FLOW_CCA_BECN] = CTRL_MSG_FLOW_CCA_BECN;
 
     ctrlq->ctrlq_head = ctrlq->ctrlq_tail = 0;
     ctrlq->ctrlq_overflow = 0;
@@ -746,7 +737,7 @@ ctrlq_init(struct ips_ctrlq *ctrlq, int flowid, struct ips_proto *proto)
     /* We never enqueue connect messages.  They require 512 bytes and we don't
      * want to stack allocate 512 bytes just when sending back acks.
      */
-    ctrl_msg_queue_never_enqueue = CTRL_MSG_CONNECT_REQUEST_QUEUED |
+    proto->ctrl_msg_queue_never_enqueue = CTRL_MSG_CONNECT_REQUEST_QUEUED |
 				   CTRL_MSG_CONNECT_REPLY_QUEUED |
 				   CTRL_MSG_DISCONNECT_REQUEST_QUEUED |
                                    CTRL_MSG_DISCONNECT_REPLY_QUEUED |
@@ -870,7 +861,7 @@ _build_ctrl_message(struct ips_proto *proto,
 	}
 
 	p_hdr->data[0].u64 = args[0].u64; /* Send descriptor id */
-	p_hdr->data[1].u32w0 = tidrecvc->tidflow_genseq.psn; /*New flowgenseq*/
+	p_hdr->data[1].u32w0 = tidrecvc->tidflow_genseq.val; /*New flowgenseq*/
 	
 	/* Ack seqnum contains the old generation we are acking for */
 	ack_seq_num = tidrecvc->tidflow_genseq;
@@ -882,18 +873,22 @@ _build_ctrl_message(struct ips_proto *proto,
       break;
       
     case OPCODE_ERR_CHK:
+      {
+	psmi_seqnum_t err_chk_seq;
 	ips_ptladdr_lock(ipsaddr);
-        p_hdr->bth[2] = 
-	__cpu_to_be32(SLIST_EMPTY(&flow->scb_pend) ?  
-	    flow->xmit_seq_num.psn - 1 :
-	    (SLIST_FIRST(&flow->scb_pend)->seq_num.psn - 1) & LOWER_24_BITS);
+
+	err_chk_seq = (SLIST_EMPTY(&flow->scb_pend)) ?
+	    flow->xmit_seq_num : SLIST_FIRST(&flow->scb_pend)->seq_num;
+	err_chk_seq.pkt -= 1;
+	p_hdr->bth[2] = __cpu_to_be32(err_chk_seq.psn);
 	ips_ptladdr_unlock(ipsaddr);
 	p_hdr->data[0].u32w0 = host_ipv4addr;
 	p_hdr->data[0].u32w1 = host_pid;
 
 	if (ipsaddr->flags & SESS_FLAG_HAS_RCVTHREAD)
 	    pkt_flags |= INFINIPATH_KPF_INTR;
-        break;
+      }
+      break;
 	
     case OPCODE_ERR_CHK_GEN:
       {
@@ -966,7 +961,6 @@ _build_ctrl_message(struct ips_proto *proto,
 	    IPS_HEADER_QUEUE_IWORDS - IPS_HEADER_QUEUE_HWORDS;
         p_hdr->bth[0] = __cpu_to_be32((IPATH_OPCODE_USER1 << 24) + 
 				      ctrl_path->epr_pkey);
-	p_hdr->bth[2] = __cpu_to_le32(flow->xmit_seq_num.psn);
 	paylen = 
 	    ips_proto_build_connect_message(proto, msg, ipsaddr, 
 					    message_type, payload);
@@ -1032,7 +1026,7 @@ ips_proto_send_ctrl_message(struct ips_flow *flow, uint8_t message_type,
     ptl_arg_t *args = (ptl_arg_t *) payload;
     ips_epaddr_t *ipsaddr = flow->ipsaddr;
     struct ips_proto *proto = ipsaddr->proto;
-    struct ips_ctrlq *ctrlq = &proto->ctrlq[(int) (flow->flowid&0xf)];
+    struct ips_ctrlq *ctrlq = &proto->ctrlq[IPS_FLOWID2INDEX(flow->flowid)];
     struct ips_ctrlq_elem *cqe = ctrlq->ctrlq_cqe;
     uint32_t cksum = 0;
     int paylen;
@@ -1097,14 +1091,14 @@ ips_proto_send_ctrl_message(struct ips_flow *flow, uint8_t message_type,
     else
       proto->stats.pio_busy_cnt++;
 
-    if (!(ctrl_msg_queue_never_enqueue & message_type_to_index[message_type])) {
+    if (!(proto->ctrl_msg_queue_never_enqueue & proto->message_type_to_index[message_type])) {
       
-      if ((*msg_queue_mask) & message_type_to_index[message_type]) {
+      if ((*msg_queue_mask) & proto->message_type_to_index[message_type]) {
 	/* This type of control message is already queued, skip it */
 	err = PSM_OK;
       } else if (cqe[ctrlq->ctrlq_head].ipsaddr == NULL) {
 	// entry is free
-	*msg_queue_mask |= message_type2index(message_type);
+	*msg_queue_mask |= message_type2index(proto, message_type);
 	
 	cqe[ctrlq->ctrlq_head].ipsaddr = ipsaddr;
 	cqe[ctrlq->ctrlq_head].message_type = message_type;
@@ -1124,7 +1118,7 @@ ips_proto_send_ctrl_message(struct ips_flow *flow, uint8_t message_type,
 	
 	err = PSM_OK;
       } else {
-	ctrl_msg_queue_overflow++;
+	proto->ctrl_msg_queue_overflow++;
       }
     }
 
@@ -1199,7 +1193,7 @@ ips_proto_timer_ctrlq_callback(struct psmi_timer *timer, uint64_t t_cyc_expire)
 	if (err == PSM_OK) {
 	  ips_epaddr_stats_send(ipsaddr, msg_type);
 	  *cqe[ctrlq->ctrlq_tail].msg_queue_mask &=
-	    ~message_type2index(cqe[ctrlq->ctrlq_tail].message_type);
+	    ~message_type2index(proto, cqe[ctrlq->ctrlq_tail].message_type);
 	  cqe[ctrlq->ctrlq_tail].ipsaddr = NULL;
 	  ctrlq->ctrlq_tail = (ctrlq->ctrlq_tail + 1) % CTRL_MSG_QEUEUE_SIZE;
         } else {
@@ -1409,8 +1403,8 @@ ips_proto_flow_flush_dma(struct ips_flow *flow, int *nflushed)
 	    if (++i > nsent) 
 		break;
 	    scb->flags &= ~IPS_SEND_FLAG_PENDING;
-	    scb->ack_timeout = flow->path->epr_timeout_ack;
-	    scb->abs_timeout = flow->path->epr_timeout_ack + t_cyc;
+	    scb->ack_timeout = scb->nfrag*flow->path->epr_timeout_ack;
+	    scb->abs_timeout = scb->nfrag*flow->path->epr_timeout_ack + t_cyc;
 	    scb->dma_ctr = proto->iovec_cntr_next_inflight++;
 	    if (scb->tidsendc)
 	      ips_protoexp_scb_inflight(scb);
@@ -1523,7 +1517,7 @@ ips_dma_transfer_frame(struct ips_proto *proto, struct ips_flow *flow,
     psm_error_t err;
     uint32_t have_cksum = 
       ((proto->flags & IPS_PROTO_FLAG_CKSUM) &&
-       (((__le32_to_cpu(pbc_hdr_i->hdr.iph.ver_context_tid_offset) >> INFINIPATH_I_TID_SHIFT) & INFINIPATH_I_TID_MASK) == IPATH_EAGER_TID_ID));
+       (((__le32_to_cpu(pbc_hdr_i->hdr.iph.ver_context_tid_offset) >> INFINIPATH_I_TID_SHIFT) & INFINIPATH_I_TID_MASK) == IPATH_EAGER_TID_ID) && (pbc_hdr_i->hdr.mqhdr != MQ_MSG_DATA_BLK));
     
     psmi_assert((paylen & 0x3) == 0);		 /* require 4-byte multiple */
     psmi_assert(((uintptr_t) payload & 0x3) == 0); /* require 4-byte alignment */
@@ -1656,7 +1650,7 @@ scb_dma_send(struct ips_proto *proto, struct ips_flow *flow,
     if_pf (dma_do_fault()) 
       goto fail;
 
-    max_elem = 2*num;
+    max_elem = 3*num;
     iovec = alloca(sizeof(struct iovec) * max_elem);
 
     if_pf (iovec == NULL) {
@@ -1679,7 +1673,8 @@ writev_again:
 	
 	/* Checksum all eager packets */
 	cksum = ((proto->flags & IPS_PROTO_FLAG_CKSUM) && 
-		 (scb->tid == IPATH_EAGER_TID_ID));
+		 (scb->tid == IPATH_EAGER_TID_ID) &&
+		 (scb->ips_lrh.mqhdr != MQ_MSG_DATA_BLK));
 	
 	ips_proto_pbc_update(proto, flow, PSMI_FALSE, &scb->pbc, 
 			     sizeof(struct ips_message_header),
@@ -1701,10 +1696,16 @@ writev_again:
 	     *
 	     * If checksum is enabled use a bounce buffer.
 	     */
-	  if ((((uintptr_t) scb->payload) & 0x3) || cksum) {
+	    if ((((uintptr_t) scb->payload) & 0x3) || cksum) {
 		void *buf = scb->payload;
 		uint32_t len = scb->payload_size;
 	     
+		if (scb->nfrag > 1) {
+		  err = psmi_handle_error(PSMI_EP_NORETURN, PSM_INTERNAL_ERR,
+			"buffer alignment for sdma error");
+		  goto fail;
+		}
+
 		/* Only allocate buffer if current buffer is a user buffer */
 		if (!((scb->payload >= scb->scbc->sbuf_buf_base) &&
 		      (scb->payload <= scb->scbc->sbuf_buf_last))){
@@ -1743,6 +1744,20 @@ writev_again:
 		scb->seq_num.psn,
 		iovec[vec_idx-2].iov_base, (int) iovec[vec_idx-2].iov_len,
 		iovec[vec_idx-1].iov_base, (int) iovec[vec_idx-1].iov_len);
+
+	    /*
+	     * if there are multiple frag payload, set the right frag size.
+	     */
+	    if (scb->nfrag > 1) {
+		scb->pbc.fill1 = __cpu_to_le16(scb->frag_size);   
+
+		/* give tidinfo to qib driver */
+		if (scb->tidsendc) {
+		    iovec[vec_idx].iov_base = scb->tsess;
+		    iovec[vec_idx].iov_len  = scb->tsess_length;
+		    vec_idx++;
+		}
+	    }
 	}
 	else {
 	  /* If checksum enabled need to send checksum at end of header 
@@ -1882,6 +1897,8 @@ ips_proto_dma_wait_until(struct ips_proto *proto, uint32_t dma_cntr)
 
     return err;
 }
+
+#define ERRCHK_NOT_SERIALIZED	1
 
 psm_error_t 
 ips_proto_timer_ack_callback(struct psmi_timer *current_timer, uint64_t current)

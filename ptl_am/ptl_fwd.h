@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -39,8 +40,8 @@
 struct ptl_ctl_init psmi_ptl_amsh;
 
 /* Special non-ptl function exposed to pre-attach to shm segment */
-psm_error_t psmi_shm_attach(const psm_uuid_t uuid_key, int *shmidx_o);
-psm_error_t psmi_shm_detach();
+psm_error_t psmi_shm_attach(psm_ep_t ep, int *shmidx_o);
+psm_error_t psmi_shm_detach(psm_ep_t ep);
 
 extern int psmi_shm_mq_rv_thresh;
 

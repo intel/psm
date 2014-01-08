@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -47,7 +48,7 @@ ips_scbctrl_init(const psmi_context_t *context,
     struct ips_scb *scb;
     size_t scb_size;
     psm_ep_t ep = context->ep;
-    scbc->context = context;
+    //scbc->context = context;
     psm_error_t err = PSM_OK;
 
     psmi_assert_always(numscb > 0);
@@ -236,6 +237,8 @@ ips_scbctrl_alloc(struct ips_scbctrl *scbc, int scbnum, int len, uint32_t flags)
 	scb->callback = NULL;
         scb->ips_lrh.mqhdr = 0;
         scb->offset = 0;
+        scb->nfrag = 1;
+	scb->frag_size = 0;
 	
 	scbc->scb_num_cur--;
 	if (scbc->scb_num_cur < (scbc->scb_num >> 1))
@@ -293,6 +296,8 @@ ips_scbctrl_alloc_tiny(struct ips_scbctrl *scbc)
     scb->tid = IPATH_EAGER_TID_ID;
     scb->tidsendc = NULL;
     scb->callback = NULL;
+    scb->nfrag = 1;
+    scb->frag_size = 0;
     
     scbc->scb_num_cur--;
     if (scbc->scb_num_cur < (scbc->scb_num >> 1))

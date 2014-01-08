@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -39,34 +40,30 @@
 #include "ips_proto.h"
 #include "ips_proto_internal.h"
 
-uint8_t ips_ipd_delay[IBTA_RATE_120_GBPS + 1];
-struct hsearch_data ips_path_rec_hash;
-
 static void
 ips_gen_ipd_table(struct ips_proto *proto)
 {
   /* Based on our current link rate setup the IPD table */
-  bzero((void*) ips_ipd_delay, sizeof(ips_ipd_delay));
   switch(proto->epinfo.ep_link_rate) {
   case IBTA_RATE_10_GBPS:
-    ips_ipd_delay[IBTA_RATE_10_GBPS] = 0;
-    ips_ipd_delay[IBTA_RATE_5_GBPS] = 1;
-    ips_ipd_delay[IBTA_RATE_2_5_GBPS] = 3;
+    proto->ips_ipd_delay[IBTA_RATE_10_GBPS] = 0;
+    proto->ips_ipd_delay[IBTA_RATE_5_GBPS] = 1;
+    proto->ips_ipd_delay[IBTA_RATE_2_5_GBPS] = 3;
     break;
   case IBTA_RATE_20_GBPS:
-    ips_ipd_delay[IBTA_RATE_20_GBPS] = 0;
-    ips_ipd_delay[IBTA_RATE_10_GBPS] = 1;
-    ips_ipd_delay[IBTA_RATE_5_GBPS] = 3;
-    ips_ipd_delay[IBTA_RATE_2_5_GBPS] = 7;
+    proto->ips_ipd_delay[IBTA_RATE_20_GBPS] = 0;
+    proto->ips_ipd_delay[IBTA_RATE_10_GBPS] = 1;
+    proto->ips_ipd_delay[IBTA_RATE_5_GBPS] = 3;
+    proto->ips_ipd_delay[IBTA_RATE_2_5_GBPS] = 7;
     break;
   case IBTA_RATE_40_GBPS:
   default:
-    ips_ipd_delay[IBTA_RATE_40_GBPS] = 0;
-    ips_ipd_delay[IBTA_RATE_30_GBPS] = 1;
-    ips_ipd_delay[IBTA_RATE_20_GBPS] = 1;
-    ips_ipd_delay[IBTA_RATE_10_GBPS] = 3;
-    ips_ipd_delay[IBTA_RATE_5_GBPS] = 7;
-    ips_ipd_delay[IBTA_RATE_2_5_GBPS] = 15;
+    proto->ips_ipd_delay[IBTA_RATE_40_GBPS] = 0;
+    proto->ips_ipd_delay[IBTA_RATE_30_GBPS] = 1;
+    proto->ips_ipd_delay[IBTA_RATE_20_GBPS] = 1;
+    proto->ips_ipd_delay[IBTA_RATE_10_GBPS] = 3;
+    proto->ips_ipd_delay[IBTA_RATE_5_GBPS] = 7;
+    proto->ips_ipd_delay[IBTA_RATE_2_5_GBPS] = 15;
     break;
   }
 }
@@ -178,7 +175,7 @@ ips_none_get_path_rec(struct ips_proto *proto,
   /* Query the path record cache */
   snprintf(eplid, sizeof(eplid), "%x_%x", slid, dlid);
   elid.key = eplid;
-  hsearch_r(elid, FIND, &epath, &ips_path_rec_hash);
+  hsearch_r(elid, FIND, &epath, &proto->ips_path_rec_hash);
   
   if (!epath) {
     elid.key = psmi_calloc(proto->ep, UNDEFINED, 1, strlen(eplid) + 1);
@@ -198,7 +195,7 @@ ips_none_get_path_rec(struct ips_proto *proto,
     path_rec->epr_static_rate = 
       ips_default_hca_rate(desthca_type);  
     path_rec->epr_static_ipd = 
-      ips_ipd_delay[path_rec->epr_static_rate];
+      proto->ips_ipd_delay[path_rec->epr_static_rate];
 
     /* Setup CCA parameters for path */
     if (path_rec->epr_sl > 15) {
@@ -239,7 +236,7 @@ ips_none_get_path_rec(struct ips_proto *proto,
     /* Add path record into cache */
     strcpy(elid.key, eplid);
     elid.data = (void*) path_rec;
-    hsearch_r(elid, ENTER, &epath, &ips_path_rec_hash);
+    hsearch_r(elid, ENTER, &epath, &proto->ips_path_rec_hash);
   }
   else
     path_rec = (ips_path_rec_t*) epath->data;
@@ -653,8 +650,7 @@ psm_error_t ips_ibta_init(struct ips_proto *proto)
   srand(getpid());
 
   /* Initialize path record hash table */
-  bzero((void*) &ips_path_rec_hash, sizeof(struct hsearch_data));
-  hcreate_r(DF_PATH_REC_HASH_SIZE, &ips_path_rec_hash);
+  hcreate_r(DF_PATH_REC_HASH_SIZE, &proto->ips_path_rec_hash);
 
   /* On startup treat it as a link up/down event to setup state . */
   if ((err = ips_ibta_link_updown_event(proto)) != PSM_OK)
@@ -688,7 +684,7 @@ psm_error_t ips_ibta_fini(struct ips_proto *proto)
     err = proto->ibta.fini(proto);
   
   /* Destroy the path record hash */
-  hdestroy_r(&ips_path_rec_hash);
+  hdestroy_r(&proto->ips_path_rec_hash);
   
   return err;
 }

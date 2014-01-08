@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -37,10 +38,6 @@
 #include "kcopyrw.h"
 #include "knemrw.h"
 
-#define _shmidx _ptladdr_u32
-
-int psmi_kassist_mode = PSMI_KASSIST_OFF;
-
 static
 psm_error_t
 ptl_handle_rtsmatch_request(psm_mq_req_t req, int was_posted, amsh_am_token_t *tok)
@@ -55,20 +52,20 @@ ptl_handle_rtsmatch_request(psm_mq_req_t req, int was_posted, amsh_am_token_t *t
     _IPATH_VDBG("[shm][rndv][recv] req=%p dest=%p len=%d tok=%p\n",
 		    req, req->buf, req->recv_msglen, tok);
 
-    if ((psmi_kassist_mode & PSMI_KASSIST_GET) && req->recv_msglen > 0 &&
+    if ((ptl->ep->psmi_kassist_mode & PSMI_KASSIST_GET) && req->recv_msglen > 0 &&
 	(pid = psmi_epaddr_kcopy_pid(epaddr)))
     {
-      if (psmi_kassist_mode & PSMI_KASSIST_KCOPY) {
+      if (ptl->ep->psmi_kassist_mode & PSMI_KASSIST_KCOPY) {
 	/* kcopy can be done in handler context or not. */
-	size_t nbytes = kcopy_get(psmi_kassist_fd, pid, (void *) req->rts_sbuf,
+	size_t nbytes = kcopy_get(ptl->ep->psmi_kassist_fd, pid, (void *) req->rts_sbuf,
 				  req->buf, req->recv_msglen);
 	psmi_assert_always(nbytes == req->recv_msglen);
       }
       else {
-	psmi_assert_always(psmi_kassist_mode & PSMI_KASSIST_KNEM);
+	psmi_assert_always(ptl->ep->psmi_kassist_mode & PSMI_KASSIST_KNEM);
 	
 	/* knem copy can be done in handler context or not */
-	knem_get(psmi_kassist_fd, (int64_t) req->rts_sbuf, 
+	knem_get(ptl->ep->psmi_kassist_fd, (int64_t) req->rts_sbuf, 
 		 (void*) req->buf, req->recv_msglen);
       }
       
@@ -81,7 +78,7 @@ ptl_handle_rtsmatch_request(psm_mq_req_t req, int was_posted, amsh_am_token_t *t
     args[3].u32w1 = tok != NULL ? 1 : 0;
     
     /* If KNEM PUT is active register region for peer to PUT data to */
-    if (psmi_kassist_mode == PSMI_KASSIST_KNEM_PUT)
+    if (ptl->ep->psmi_kassist_mode == PSMI_KASSIST_KNEM_PUT)
       args[4].u64w0 = knem_register_region(req->buf, req->recv_msglen, 
 					   PSMI_TRUE);
     else
@@ -115,6 +112,7 @@ void
 psmi_am_mq_handler(void *toki, psm_amarg_t *args, int narg, void *buf, size_t len)
 {
     amsh_am_token_t *tok = (amsh_am_token_t *) toki;
+    ptl_t *ptl = tok->ptl;
     psm_mq_req_t    req;
     int rc;
     int mode        = args[0].u32w0;
@@ -148,7 +146,7 @@ psmi_am_mq_handler(void *toki, psm_amarg_t *args, int narg, void *buf, size_t le
 	    req->ptl_req_ptr = sreq;
 	    
 	    /* Overload rts_sbuf to contain the cookie for remote region */
-	    if (psmi_kassist_mode & PSMI_KASSIST_KNEM)
+	    if (ptl->ep->psmi_kassist_mode & PSMI_KASSIST_KNEM)
 	      req->rts_sbuf = (uintptr_t) args[4].u64w0;
 	    
 	    if (rc == MQ_RET_MATCH_OK) /* we are in handler context, issue a reply */
@@ -163,8 +161,8 @@ void
 psmi_am_mq_handler_data(void *toki, psm_amarg_t *args, int narg, void *buf, size_t len)
 {
     amsh_am_token_t *tok = (amsh_am_token_t *) toki;
-    psm_mq_req_t req = STAILQ_FIRST(&tok->tok.epaddr_from->egrlong[0]);
-    psmi_mq_handle_data(req, tok->tok.epaddr_from, buf, len);
+    psm_mq_req_t req = STAILQ_FIRST(&tok->tok.epaddr_from->egrlong);
+    psmi_mq_handle_data(req, tok->tok.epaddr_from, 0, args[2].u32w0, buf, len);
     
     return;
 }
@@ -173,6 +171,7 @@ void
 psmi_am_mq_handler_rtsmatch(void *toki, psm_amarg_t *args, int narg, void *buf, size_t len)
 {
     amsh_am_token_t *tok = (amsh_am_token_t *) toki;
+    ptl_t *ptl = tok->ptl;
     psm_mq_req_t sreq = (psm_mq_req_t) (uintptr_t) args[0].u64w0;
     void *dest = (void *)(uintptr_t) args[2].u64w0;
     uint32_t msglen = args[3].u32w0;
@@ -184,7 +183,7 @@ psmi_am_mq_handler_rtsmatch(void *toki, psm_amarg_t *args, int narg, void *buf, 
 
     if (msglen > 0) {
 	rarg[0].u64w0 = args[1].u64w0; /* rreq */
-	if (psmi_kassist_mode & PSMI_KASSIST_MASK)
+	if (ptl->ep->psmi_kassist_mode & PSMI_KASSIST_MASK)
 	    pid = psmi_epaddr_kcopy_pid(tok->tok.epaddr_from);
 	else
 	    pid = 0;
@@ -192,20 +191,20 @@ psmi_am_mq_handler_rtsmatch(void *toki, psm_amarg_t *args, int narg, void *buf, 
 	if (!pid) 
 	    psmi_amsh_long_reply(tok, mq_handler_rtsdone_hidx, rarg, 1, 
 				 sreq->buf, msglen, dest, 0);
-	else if (psmi_kassist_mode & PSMI_KASSIST_PUT)
+	else if (ptl->ep->psmi_kassist_mode & PSMI_KASSIST_PUT)
 	{
-	  if (psmi_kassist_mode & PSMI_KASSIST_KCOPY) {
-	    size_t nbytes = kcopy_put(psmi_kassist_fd, sreq->buf, pid, dest,
+	  if (ptl->ep->psmi_kassist_mode & PSMI_KASSIST_KCOPY) {
+	    size_t nbytes = kcopy_put(ptl->ep->psmi_kassist_fd, sreq->buf, pid, dest,
 				      msglen);
 	    psmi_assert_always(nbytes == msglen);
 	  }
 	  else {
 	    int64_t cookie = args[4].u64w0;
 	    
-	    psmi_assert_always(psmi_kassist_mode & PSMI_KASSIST_KNEM);
+	    psmi_assert_always(ptl->ep->psmi_kassist_mode & PSMI_KASSIST_KNEM);
 	    
 	    /* Do a PUT using KNEM */
-	    knem_put(psmi_kassist_fd, sreq->buf, msglen, cookie);
+	    knem_put(ptl->ep->psmi_kassist_fd, sreq->buf, msglen, cookie);
 	  }
 	  
 	  /* Send response that PUT is complete */

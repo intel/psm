@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -83,8 +84,6 @@ struct psmi_stats_entry {
 	uint64_t    off;   /* of offset if that makes more sense */
     } u;
 };
-
-uint32_t psmi_stats_mask;
 
 /*
  * Copy the array of entries and keep track of the context

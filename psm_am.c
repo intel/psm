@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -55,7 +56,7 @@ psmi_am_init_internal(psm_ep_t ep)
     psm_am_handler_fn_t *am_htable;
 
     ep->am_htable = 
-	psmi_malloc(ep, UNDEFINED,
+        psmi_malloc(ep, UNDEFINED,
 		    sizeof(psm_am_handler_fn_t) * PSMI_AM_NUM_HANDLERS);
     if (ep->am_htable == NULL)
 	return PSM_NO_MEMORY;
@@ -111,7 +112,7 @@ __psm_am_request_short(psm_epaddr_t epaddr, psm_handler_t handler,
 
     PSMI_PLOCK();
     
-    err =  ptlc->am_short_request(epaddr->ptl, epaddr, handler, args, 
+    err =  ptlc->am_short_request(epaddr, handler, args, 
 				  nargs, src, len, flags, completion_fn,
 				  completion_ctxt);
     PSMI_PUNLOCK();

@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -115,7 +116,7 @@ self_mq_send_testwait(psm_mq_req_t *ireq, int istest, psm_mq_status_t *status)
 /* Self is different.  We do everything as rendezvous. */
 static
 psm_error_t __fastpath
-self_mq_isend(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags, 
+self_mq_isend(psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags, 
 	     uint64_t tag, const void *ubuf, uint32_t len, void *context,
 	     psm_mq_req_t *req_o)
 {
@@ -146,12 +147,12 @@ self_mq_isend(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 
 static __fastpath
 psm_error_t
-self_mq_send(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags, 
+self_mq_send(psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags, 
 	    uint64_t tag, const void *ubuf, uint32_t len)
 {
     psm_error_t err;
     psm_mq_req_t req;
-    err = self_mq_isend(ptl,mq,epaddr,flags,tag,ubuf,len,NULL,&req);
+    err = self_mq_isend(mq,epaddr,flags,tag,ubuf,len,NULL,&req);
     psmi_mq_wait_internal(&req);
     return err; 
 }
@@ -169,7 +170,7 @@ self_connect(ptl_t *ptl,
     psmi_assert_always(ptl->epaddr != NULL);
     psm_epaddr_t epaddr;
     psm_error_t err = PSM_OK;
-    int i, j;
+    int i;
 
     PSMI_PLOCK_ASSERT();
 
@@ -183,8 +184,6 @@ self_connect(ptl_t *ptl,
 	    array_of_epaddr[i] = ptl->epaddr;
 	    array_of_epaddr[i]->ptl = ptl;
 	    array_of_epaddr[i]->ptlctl = ptl->ctl;
-	    for (j = 0; j < PSMI_EGRLONG_FLOWS_MAX; j++)
-		STAILQ_INIT(&array_of_epaddr[i]->egrlong[j]);
 	    array_of_epaddr[i]->epid = ptl->epid;
 	    array_of_epaddr[i]->ep = ptl->ep;
 	    if (psmi_epid_set_hostname(psm_epid_nid(ptl->epid), 
@@ -246,6 +245,9 @@ self_ptl_init(const psm_ep_t ep, ptl_t *ptl, ptl_ctl_t *ctl)
     ptl->epid = ep->epid;
     ptl->epaddr = ep->epaddr;
     ptl->ctl = ctl;
+    ep->epaddr->mctxt_prev = ep->epaddr;
+    ep->epaddr->mctxt_next = ep->epaddr;
+    ep->epaddr->mctxt_master = ep->epaddr;
 
     memset(ctl, 0, sizeof(*ctl));
     /* Fill in the control structure */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013. QLogic Corporation. All rights reserved.
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -37,11 +37,6 @@
 #include "ips_proto.h"
 #include "ips_proto_internal.h"
 
-// Smallest interval in cycles between which we warn about stray messages
-// This is a per-endpoint quantity, overridable with PSM_STRAY_WARN_INTERVAL
-// We use the same interval to send the "die" message.
-static uint64_t stray_warn_interval = (uint64_t) -1;
-
 #define PSM_STRAY_WARN_INTERVAL_DEFAULT_SECS	30
 static void ips_report_strays(struct ips_proto *proto);
 
@@ -53,14 +48,8 @@ static void ips_report_strays(struct ips_proto *proto);
 psm_error_t
 ips_proto_recv_init(struct ips_proto *proto)
 {
-    static int init_once = 0;
     uint32_t interval_secs;
     union psmi_envvar_val env_stray;
-
-    if (init_once)
-	return PSM_OK;
-
-    init_once = 1;
 
     psmi_getenv("PSM_STRAY_WARNINTERVAL", 
 		"min secs between stray process warnings",
@@ -70,9 +59,9 @@ ips_proto_recv_init(struct ips_proto *proto)
 		&env_stray);
     interval_secs = env_stray.e_uint;
     if (interval_secs > 0)
-	stray_warn_interval = sec_2_cycles(interval_secs);
+	proto->stray_warn_interval = sec_2_cycles(interval_secs);
     else
-	stray_warn_interval = 0;
+	proto->stray_warn_interval = 0;
 
     return PSM_OK;
 }
@@ -202,145 +191,168 @@ _process_mq(struct ips_recvhdrq_event *rcv_ev)
     psm_mq_req_t req;
     psmi_egrid_t egrid;
     ips_epaddr_t *ipsaddr = rcv_ev->ipsaddr;
+    psm_epaddr_t epaddr = ipsaddr->epaddr;
     psm_mq_t mq = rcv_ev->proto->mq; 
     ptl_arg_t *args;
     ptl_epaddr_flow_t flowid = ips_proto_flowid(p_hdr);
     struct ips_flow *flow = &ipsaddr->flows[flowid];
+    int ret = IPS_RECVHDRQ_CONTINUE;
     
     if (!ips_proto_is_expected_or_nak((struct ips_recvhdrq_event*) rcv_ev))
-	return IPS_RECVHDRQ_CONTINUE;
+	goto skip_ack_req;
     
     _IPATH_VDBG("Rcvd ctrl packet %s length = %i, mode=%d, arg0=%llx arg1=%llx\n", 
-	psmi_epaddr_get_name(ipsaddr->epaddr->epid), 
+	psmi_epaddr_get_name(epaddr->epid), 
 	paylen, p_hdr->mqhdr, 
 	(long long) p_hdr->data[0].u64, (long long) p_hdr->data[1].u64);
     
-    if (mode <= MQ_MSG_LONG) {
-	if (mode == MQ_MSG_SHORT) {
-	    /* May have padded writes, account for it */
-	    paylen -= p_hdr->hdr_dlen;
-	    msglen = paylen;
-	}
-	else if (mode == MQ_MSG_TINY) {
-	    payload = (void *) &p_hdr->data[1];
-	    msglen = paylen = p_hdr->hdr_dlen;
-	}
-	else if (mode == MQ_MSG_LONG) {
-	    msglen = p_hdr->data[1].u32w0;
-	    if (ipsaddr->flags & SESS_FLAG_HAS_FLOWID) {
-		egrid.egr_data = p_hdr->data[1].u32w1;
-		_IPATH_VDBG("egrid-msglong is 0x%x\n", egrid.egr_data);
+    if (mode <= MQ_MSG_RTS_WAIT) {
+	ret = ips_proto_check_msg_order(epaddr, flow, p_hdr);
+	if (ret == 0) return IPS_RECVHDRQ_OOO;
+
+	if (mode <= MQ_MSG_LONG) {
+	    egrid.egr_data = 0; 
+	    if (mode == MQ_MSG_SHORT) {
+		/* May have padded writes, account for it */
+		paylen -= p_hdr->hdr_dlen;
+		msglen = paylen;
 	    }
-	    else
-		egrid.egr_data = 0; 
-	}
-
-	psmi_mq_handle_envelope(
-	    mq, mode, ipsaddr->epaddr, p_hdr->data[0].u64, /* tag */
-	    egrid, msglen, (void *) payload, paylen);
-    }
-    else {
-
-	switch (mode) {
-	    case MQ_MSG_DATA: 
-	    {
-		psm_mq_req_t req;
-
+	    else if (mode == MQ_MSG_TINY) {
+		payload = (void *) &p_hdr->data[1];
+		msglen = paylen = p_hdr->hdr_dlen;
+	    }
+	    else if (mode == MQ_MSG_LONG) {
+		msglen = p_hdr->data[1].u32w1;
 		if (ipsaddr->flags & SESS_FLAG_HAS_FLOWID) {
-		    req = STAILQ_FIRST(&ipsaddr->epaddr->egrlong[flowid]);
 		    egrid.egr_data = p_hdr->data[1].u32w0;
-		    psmi_assert(egrid.egr_flowid == 
-				(int) ips_proto_flowid(p_hdr));
-		    _IPATH_VDBG("egrid-data is 0x%x\n", egrid.egr_data);
-		    if_pf (req == NULL)
-		      _IPATH_VDBG("No receive envelope for msg %d\n",
-				  egrid.egr_msgno);
-
-		    if_pf (req == NULL || 
-			req->egrid.egr_msgno != egrid.egr_msgno) 
-		    {
-			/* Restore next expected sequence number as if the
-			 * packet hadn't been received at all, and nak packet
-			 */
-			if (req != NULL)
-			    _IPATH_VDBG("wanted msgno %d, got %d\n",
-				    req->egrid.egr_msgno, egrid.egr_msgno);
-			flow->recv_seq_num.val = 
-			    (flow->recv_seq_num.val - 1) & LOWER_24_BITS;
-			if (!(flow->flags & IPS_FLOW_FLAG_NAK_SEND)) {
-			  if (!ips_proto_send_ctrl_message(&ipsaddr->flows[flow->flowid], 
-							   OPCODE_NAK,
-							   &ipsaddr->ctrl_msg_queued, 
-							   NULL))
-			    flow->flags |= IPS_FLOW_FLAG_NAK_SEND;
-			}
-			goto skip_ack_req;
-		    }
-		    psmi_assert(req->type & MQE_TYPE_EGRLONG);
+		    _IPATH_VDBG("egrid-msglong is 0x%x\n", egrid.egr_data);
 		}
-		else {
-		    req = STAILQ_FIRST(&ipsaddr->epaddr->egrlong[0]);
-		    psmi_assert(req != NULL);
-		}
-
-		psmi_mq_handle_data(req, ipsaddr->epaddr, payload, paylen);
-		break;
 	    }
 
-	    case MQ_MSG_RTS:
-	    case MQ_MSG_RTS_WAIT:
-	    case MQ_MSG_RTS_EGR:
-		args = (ptl_arg_t *) p_hdr->data;
-		ips_proto_mq_handle_rts_envelope(mq, mode, ipsaddr, 
+	    if (ret == 1)
+		psmi_mq_handle_envelope(
+		    mq, mode, epaddr, p_hdr->data[0].u64, /* tag */
+		    egrid, msglen, (void *) payload, paylen);
+	    else
+		psmi_mq_handle_envelope_outoforder(
+		    mq, mode, epaddr, flow->msg_ooo_seqnum,
+		    p_hdr->data[0].u64, /* tag */
+		    egrid, msglen, (void *) payload, paylen);
+	} else {
+	    args = (ptl_arg_t *) p_hdr->data;
+	    if (ret == 1)
+		ips_proto_mq_handle_rts_envelope(mq, mode, epaddr, 
 		    args[0].u64, args[1].u32w0, args[1].u32w1);
-		break;
-
-	    case MQ_MSG_DATA_REQ:
-		req = psmi_mpool_find_obj_by_index(mq->rreq_pool,
-					     p_hdr->data[0].u32w0);
-		psmi_assert(req != NULL);
-		psmi_mq_handle_data(req, ipsaddr->epaddr, 
-				    (void *) payload, paylen);
-		break;
-
-	    case MQ_MSG_CTS_EGR:
-		args = p_hdr->data;
-		ips_proto_mq_handle_cts(rcv_ev->proto, args);
-		break;
-
-	    default:
-		break;
+	    else
+		ips_proto_mq_handle_rts_envelope_outoforder(mq, mode,
+		    epaddr, flow->msg_ooo_seqnum,
+		    args[0].u64, args[1].u32w0, args[1].u32w1);
 	}
+
+	if (ret == 1) {
+	    if (epaddr->mctxt_master->outoforder_c) {
+		psmi_mq_handle_outoforder_queue(epaddr->mctxt_master);
+	    }
+	    ret = IPS_RECVHDRQ_CONTINUE;
+	} else {
+	    ret = IPS_RECVHDRQ_BREAK;
+	}
+    } else if (mode == MQ_MSG_DATA || mode == MQ_MSG_DATA_BLK) {
+	psm_mq_req_t req;
+
+	req = STAILQ_FIRST(&epaddr->mctxt_master->egrlong);
+	while (req) {
+	    if (req->egrid.egr_data == p_hdr->data[1].u32w0) break;
+	    req = STAILQ_NEXT(req, nextq);
+	}
+
+/*
+ * Even with single context, since the header is sent via pio-flow,
+ * and data is sent via sdma-flow, data could be received first,
+ * thus causes req=NULL.
+ */
+	if (req == NULL) {
+	    flow->msg_ooo_toggle = !flow->msg_ooo_toggle;
+	    if (flow->msg_ooo_toggle) {
+		flow->recv_seq_num.pkt -= 1;
+		return IPS_RECVHDRQ_OOO;
+	    }
+	} else {
+	    flow->msg_ooo_toggle = 0;
+	}
+
+	psmi_mq_handle_data(req, epaddr, p_hdr->data[1].u32w0,
+		p_hdr->data[1].u32w1, payload, paylen);
+
+	/* If checksum is enabled, this matches what is done for tid-sdma */
+	/* if OOO and req is NULL, header is not received and we ignore chksum */
+	if (rcv_ev->proto->flags & IPS_PROTO_FLAG_CKSUM &&
+			mode == MQ_MSG_DATA_BLK &&
+			req && req->state == MQ_STATE_COMPLETE) {
+		uint32_t cksum = ips_crc_calculate(
+			req->send_msglen - p_hdr->data[0].u32w1,
+			(uint8_t *)req->buf + p_hdr->data[0].u32w1, 
+			0xffffffff);
+		if (p_hdr->data[0].u32w0 != cksum) {
+			psmi_handle_error(PSMI_EP_NORETURN, PSM_INTERNAL_ERR,
+			"ErrPkt: Checksum mismatch. Expected: 0x%08x, Received: 0x%08x Source LID: %i. Aborting! \n", p_hdr->data[0].u32w0, cksum, __be16_to_cpu(flow->path->epr_dlid));
+			ips_proto_dump_data(req->buf, req->send_msglen);
+		}
+	}
+
+    } else if (mode == MQ_MSG_DATA_REQ) {
+	req = psmi_mpool_find_obj_by_index(mq->rreq_pool,
+				     p_hdr->data[1].u32w0);
+	psmi_assert(req != NULL);
+	psmi_mq_handle_data(req, epaddr, p_hdr->data[1].u32w0,
+		p_hdr->data[1].u32w1, (void *) payload, paylen);
+
+    } else if (mode == MQ_MSG_CTS_EGR) {
+	args = p_hdr->data;
+	ips_proto_mq_handle_cts(rcv_ev->proto, args);
+    } else {
+	psmi_handle_error(PSMI_EP_NORETURN, PSM_INTERNAL_ERR,
+		"Unknown frame mode %x", mode);
     }
 
     if ((p_hdr->flags & IPS_SEND_FLAG_ACK_REQ)  ||
 	(flow->flags & IPS_FLOW_FLAG_GEN_BECN))
       ips_proto_send_ack((struct ips_recvhdrq *) rcv_ev->recvq, flow);
     
- skip_ack_req:
+skip_ack_req:
+    ips_proto_process_ack(rcv_ev);
     
-    return IPS_RECVHDRQ_CONTINUE; // skip
+    return ret; // skip
+}
+
+PSMI_INLINE(
+int between(int first_seq, int last_seq, int seq))
+{
+  if (last_seq >= first_seq) {
+    if (seq < first_seq || seq > last_seq) {
+	return 0;
+    }
+  } else {
+    if (seq > last_seq && seq < first_seq) {
+	return 0;
+    }
+  }
+  return 1;
 }
 
 PSMI_INLINE(
 int pio_dma_ack_valid(struct ips_flow *flow, psmi_seqnum_t ack_seq_num, 
 		      uint32_t ack_window))
 {
-  uint32_t ack_window_hi, ack_window_lo;
+  uint32_t first_pkt, last_pkt;
   struct ips_scb_unackedq *unackedq = &flow->scb_unacked;
   
   if (STAILQ_EMPTY(unackedq))
     return 0;
   
-  ack_window_hi = LOWER_24_BITS &
-    (ack_seq_num.psn - STAILQ_FIRST(unackedq)->seq_num.psn);
-  ack_window_lo = LOWER_24_BITS &
-    (STAILQ_LAST(unackedq, ips_scb, nextq)->seq_num.psn - ack_seq_num.psn);
-  
-  if (ack_window_hi > ack_window || ack_window_lo > ack_window)
-    return 0;
-  else
-    return 1;
+  first_pkt = flow->xmit_ack_num.pkt + 1;
+  last_pkt = STAILQ_LAST(unackedq, ips_scb, nextq)->seq_num.pkt;
+  return between(first_pkt, last_pkt, ack_seq_num.pkt);
 }
 
 PSMI_INLINE(
@@ -354,7 +366,7 @@ struct ips_flow* get_tidflow(ips_epaddr_t *ipsaddr,
   struct ips_tid_send_desc *tidsendc;
   ptl_arg_t desc_id = p_hdr->data[0];
   ptl_arg_t desc_tidsendc;
-  uint32_t ack_window_hi, ack_window_lo;
+  uint32_t first_seq, last_seq;
   struct ips_scb_unackedq *unackedq;
   
   tidsendc = (struct ips_tid_send_desc*)
@@ -364,7 +376,7 @@ struct ips_flow* get_tidflow(ips_epaddr_t *ipsaddr,
     _IPATH_ERROR("OPCODE_ACK: Index %d is out of range in tidflow ack\n", desc_id._desc_idx);
     return NULL;
   }
-      
+
   /* Ensure generation matches */
   psmi_mpool_get_obj_index_gen_count(tidsendc,
 				     &desc_tidsendc._desc_idx,
@@ -378,27 +390,19 @@ struct ips_flow* get_tidflow(ips_epaddr_t *ipsaddr,
   
   /* No unacked scbs */
   if (STAILQ_EMPTY(unackedq))
-    return 0;
-  
-  ack_window_hi = LOWER_24_BITS &
-    (ack_seq_num.seq - STAILQ_FIRST(unackedq)->seq_num.seq);
-  ack_window_lo = LOWER_24_BITS &
-    (STAILQ_LAST(unackedq, ips_scb, nextq)->seq_num.seq - ack_seq_num.seq);
-  
-  if (ack_window_hi > ack_window || ack_window_lo > ack_window)
     return NULL;
-  else {
-    
-    /* Generation for ack should match */
-    if (STAILQ_FIRST(unackedq)->seq_num.gen != ack_seq_num.gen)
-      return NULL;
-    
-    flow->xmit_ack_num = ack_seq_num;
-    flow->xmit_ack_num.seq -= 1;
-    return flow;
-  }
   
-  return NULL;
+  first_seq = flow->xmit_ack_num.seq + 1;
+  last_seq = STAILQ_LAST(unackedq, ips_scb, nextq)->seq_num.seq;
+  if (between(first_seq, last_seq, ack_seq_num.seq) == 0) {
+    return NULL;
+  }
+   
+  /* Generation for ack should match */
+  if (STAILQ_FIRST(unackedq)->seq_num.gen != ack_seq_num.gen)
+    return NULL;
+    
+  return flow;
 }
 
 /* NAK post process for tid flow */
@@ -419,15 +423,17 @@ void ips_tidflow_nak_post_process(struct ips_flow *flow,
   
   psmi_assert(STAILQ_FIRST(unackedq)->seq_num.flow==new_flowgenseq.flow);
   psmi_assert(STAILQ_FIRST(unackedq)->seq_num.gen != new_flowgenseq.gen);
-  psmi_assert(STAILQ_FIRST(unackedq)->seq_num.seq == new_flowgenseq.seq);
+  psmi_assert(STAILQ_FIRST(unackedq)->
+	seq_num.seq-STAILQ_FIRST(unackedq)->nfrag+1 == new_flowgenseq.seq);
 
   /* Update unacked scb's to use the new flowgenseq */
   scb = STAILQ_FIRST(unackedq);
   while (scb) {
+    scb->ips_lrh.bth[2] = __cpu_to_be32(flow->xmit_seq_num.psn);
+    flow->xmit_seq_num.seq += scb->nfrag;
     scb->seq_num = flow->xmit_seq_num;
-    scb->ips_lrh.bth[2] = __cpu_to_be32(scb->seq_num.psn);
+    scb->seq_num.seq--;
     scb = SLIST_NEXT(scb, next);
-    flow->xmit_seq_num.seq += 1;
   }
   
 }
@@ -439,7 +445,7 @@ ips_proto_process_ack(struct ips_recvhdrq_event *rcv_ev)
 {
     ips_epaddr_t *ipsaddr = rcv_ev->ipsaddr; 
     struct ips_message_header *p_hdr = rcv_ev->p_hdr; 
-    psmi_seqnum_t ack_seq_num, prev_seq_num;
+    psmi_seqnum_t ack_seq_num, last_seq_num;
     ips_scb_t *scb;
     struct ips_proto *proto = ipsaddr->proto;    
     struct ips_flow *flow = NULL;
@@ -451,34 +457,46 @@ ips_proto_process_ack(struct ips_recvhdrq_event *rcv_ev)
     ips_ptladdr_lock(ipsaddr);
     
     IPS_FLOWID_UNPACK(p_hdr->flowid, protocol, flowid);
-    prev_seq_num.val = ack_seq_num.val = p_hdr->ack_seq_num;
+    ack_seq_num.psn = p_hdr->ack_seq_num;
 
     switch(protocol){
     case PSM_PROTOCOL_GO_BACK_N:
       flow = &ipsaddr->flows[flowid];
-      prev_seq_num.psn -= 1;
-      if (!pio_dma_ack_valid(flow, prev_seq_num, proto->scb_max_inflight))
-	return;
-      flow->xmit_ack_num.psn = prev_seq_num.psn;
+      ack_seq_num.pkt -= 1;
+      if (!pio_dma_ack_valid(flow, ack_seq_num, proto->scb_max_inflight))
+	goto ret;
+      flow->xmit_ack_num = ack_seq_num;
       break;
     case PSM_PROTOCOL_TIDFLOW:
-      prev_seq_num.seq -= 1;
-      flow = get_tidflow(ipsaddr, p_hdr, prev_seq_num, proto->scb_max_inflight);
-      
+      ack_seq_num.seq -= 1;
+      flow = get_tidflow(ipsaddr, p_hdr, ack_seq_num, proto->scb_max_inflight);
+      if (!flow) /* Invalid ack for flow */
+        goto ret;
+      flow->xmit_ack_num = ack_seq_num;
       break;
     default:
       _IPATH_ERROR("OPCODE_ACK: Unknown flow type %d in ACK\n", flowid);
     }
     
-    if (!flow) /* Invalid ack for flow */
-      goto ret;
-    
     unackedq = &flow->scb_unacked;
     scb_pend = &flow->scb_pend;
+    last_seq_num = STAILQ_LAST(unackedq, ips_scb, nextq)->seq_num;
     
     INC_TIME_SPEND(TIME_SPEND_USER2);
 
-    while (STAILQ_FIRST(unackedq)->seq_num.psn != ack_seq_num.psn) {
+    /* For tidflow, we want to match all flow/gen/seq,
+       for gobackn, we only match pkt#, msg# is not known.
+       msg# is the message envelope number in the stream,
+       you don't know if the next packet has the old msg#
+       or starts a new msg#.
+    */
+    /*  first release all xmit buffer that has been receveid   */
+    while ((protocol==PSM_PROTOCOL_GO_BACK_N) ?
+		between(STAILQ_FIRST(unackedq)->seq_num.pkt,
+			last_seq_num.pkt, ack_seq_num.pkt) :
+		between(STAILQ_FIRST(unackedq)->seq_num.psn,
+			last_seq_num.psn, ack_seq_num.psn)
+    ) {
 
         /* take it out of the xmit queue and ..  */
 	scb = STAILQ_FIRST(unackedq);
@@ -495,7 +513,7 @@ ips_proto_process_ack(struct ips_recvhdrq_event *rcv_ev)
 	    ips_proto_dma_wait_until(proto, scb->dma_ctr);
 
         if (scb->callback)
-            (*scb->callback) (scb->cb_param);
+            (*scb->callback) (scb->cb_param, scb->payload_size-scb->extra_bytes);
 
 	if (!(scb->flags & IPS_SEND_FLAG_PERSISTENT))
 	    ips_scbctrl_free(scb);
@@ -559,7 +577,7 @@ _process_nak(struct ips_recvhdrq_event *rcv_ev)
 {
     ips_epaddr_t *ipsaddr = rcv_ev->ipsaddr;
     struct ips_message_header *p_hdr = rcv_ev->p_hdr; 
-    psmi_seqnum_t ack_seq_num;
+    psmi_seqnum_t ack_seq_num, last_seq_num;
     ips_scb_t *scb;
     struct ips_proto *proto = ipsaddr->proto;
     struct ips_flow *flow = NULL;
@@ -575,35 +593,33 @@ _process_nak(struct ips_recvhdrq_event *rcv_ev)
 
     INC_TIME_SPEND(TIME_SPEND_USER3);
 
-    ack_seq_num.val = p_hdr->ack_seq_num;
+    ack_seq_num.psn = p_hdr->ack_seq_num;
     
     switch(protocol){
     case PSM_PROTOCOL_GO_BACK_N:
       flow = &ipsaddr->flows[flowid];
-            
       if (!pio_dma_ack_valid(flow, ack_seq_num, proto->scb_max_inflight)) 
 	goto ret;
-      flow->xmit_ack_num.psn = ack_seq_num.psn - 1;
+      ack_seq_num.pkt--;
+      flow->xmit_ack_num = ack_seq_num;
       break;
     case PSM_PROTOCOL_TIDFLOW:
-      {
-	psmi_seqnum_t new_flowgenseq;
-	
-	new_flowgenseq.val = p_hdr->data[1].u32w0;
-	flow = get_tidflow(ipsaddr, p_hdr, ack_seq_num, proto->scb_max_inflight);
-	if (flow)   /* Update xmit seq num to the new flowgenseq */
-	  flow->xmit_seq_num = new_flowgenseq;
-      }
+      flow = get_tidflow(ipsaddr, p_hdr, ack_seq_num, proto->scb_max_inflight);
+      if (!flow)
+	goto ret;  /* Invalid ack for flow */
+      ack_seq_num.seq--;
+      /* Update xmit seq num to the new flowgenseq */
+      flow->xmit_seq_num = (psmi_seqnum_t)p_hdr->data[1].u32w0;
+      flow->xmit_ack_num = flow->xmit_seq_num;
+      flow->xmit_ack_num.seq--;
       break;
     default:
       _IPATH_ERROR("OPCODE_NAK: Unknown flow type %d in ACK\n", flowid);
     }
     
-    if (!flow) /* Invalid ack for flow */
-      goto ret;
-
     unackedq = &flow->scb_unacked;
     scb_pend = &flow->scb_pend;
+    last_seq_num = STAILQ_LAST(unackedq, ips_scb, nextq)->seq_num;
         
     ipsaddr->stats.nak_recv++;
 
@@ -612,8 +628,19 @@ _process_nak(struct ips_recvhdrq_event *rcv_ev)
 		flowid, STAILQ_FIRST(unackedq)->seq_num.psn,
 		STAILQ_LAST(unackedq, ips_scb, nextq)->seq_num.psn);
 
+    /* For tidflow, we want to match all flow/gen/seq,
+       for gobackn, we only match pkt#, msg# is not known.
+       msg# is the message envelope number in the stream,
+       you don't know if the next packet has the old msg#
+       or starts a new msg#.
+    */
     /*  first release all xmit buffer that has been receveid   */
-    while (STAILQ_FIRST(unackedq)->seq_num.psn != ack_seq_num.psn) {
+    while ((protocol==PSM_PROTOCOL_GO_BACK_N) ?
+		between(STAILQ_FIRST(unackedq)->seq_num.pkt,
+			last_seq_num.pkt, ack_seq_num.pkt) :
+		between(STAILQ_FIRST(unackedq)->seq_num.psn,
+			last_seq_num.psn, ack_seq_num.psn)
+    ) {
         /* take it out of the xmit queue and ..  */
 	scb = STAILQ_FIRST(unackedq);
 	STAILQ_REMOVE_HEAD(unackedq, nextq);
@@ -623,7 +650,7 @@ _process_nak(struct ips_recvhdrq_event *rcv_ev)
 	    ips_proto_dma_wait_until(proto, scb->dma_ctr);
 
         if (scb->callback)
-            (*scb->callback) (scb->cb_param);
+            (*scb->callback) (scb->cb_param, scb->payload_size-scb->extra_bytes);
 
 	if (!(scb->flags & IPS_SEND_FLAG_PERSISTENT))
 	    ips_scbctrl_free(scb);
@@ -706,7 +733,7 @@ static void
 _process_err_chk(struct ips_recvhdrq *recvq, ips_epaddr_t *ipsaddr, 
 		 struct ips_message_header *p_hdr)
 {
-    uint32_t seq_num;
+    psmi_seqnum_t seq_num;
     int16_t seq_off;
     ptl_epaddr_flow_t flowid = ips_proto_flowid(p_hdr);
     struct ips_flow *flow = &ipsaddr->flows[flowid];
@@ -715,12 +742,12 @@ _process_err_chk(struct ips_recvhdrq *recvq, ips_epaddr_t *ipsaddr,
 
     ipsaddr->stats.err_chk_recv++;
 
-    seq_num = __be32_to_cpu(p_hdr->bth[2]);
-    seq_off = (int16_t)(ipsaddr->flows[flowid].recv_seq_num.val - seq_num);
+    seq_num.val = __be32_to_cpu(p_hdr->bth[2]);
+    seq_off = (int16_t)(ipsaddr->flows[flowid].recv_seq_num.pkt - seq_num.pkt);
 
     if_pf (seq_off <= 0) {
       _IPATH_VDBG("naking for seq=%d, off=%d on flowid  %d\n",
-		  seq_num, seq_off, flowid);
+		  seq_num.pkt, seq_off, flowid);
       
       if (seq_off < -flow->ack_interval) 
 	flow->flags |= IPS_FLOW_FLAG_GEN_BECN;
@@ -752,7 +779,7 @@ _process_err_chk_gen(ips_epaddr_t *ipsaddr, struct ips_message_header *p_hdr)
   ipsaddr->stats.err_chk_recv++;
   
   /* Get the flowgenseq for err chk gen */
-  err_seqnum.psn = __be32_to_cpu(p_hdr->bth[2]);
+  err_seqnum.val = __be32_to_cpu(p_hdr->bth[2]);
 
   ips_ptladdr_lock(ipsaddr);
   
@@ -812,7 +839,7 @@ _process_err_chk_gen(ips_epaddr_t *ipsaddr, struct ips_message_header *p_hdr)
   args[0] = send_desc_id;
   args[1] = tidrecvc->tid_list.tsess_descid;
   args[2].u16w0 = err_seqnum.gen; /* If NAK, generation number */
-  
+
   ips_ptladdr_unlock(ipsaddr);
   
   /* May want to generate a BECN if a lot of swapped generations */
@@ -820,13 +847,13 @@ _process_err_chk_gen(ips_epaddr_t *ipsaddr, struct ips_message_header *p_hdr)
 	 (protoexp->proto->flags & IPS_PROTO_FLAG_CCA)) {
     _IPATH_CCADBG("ERR_CHK_GEN: Generating BECN. Number of swapped generations: %d.\n", tidrecvc->tidflow_nswap_gen);
     /* Mark flow to generate BECN in control packet */
-    tidrecvc->getreq->flow.flags |= IPS_FLOW_FLAG_GEN_BECN;
+    tidrecvc->ipsaddr->tidgr_flow.flags |= IPS_FLOW_FLAG_GEN_BECN;
     
     /* Update stats for congestion encountered */
     ipsaddr->stats.congestion_pkts++;
   }
   
-  ips_proto_send_ctrl_message(&tidrecvc->getreq->flow, 
+  ips_proto_send_ctrl_message(&tidrecvc->ipsaddr->tidgr_flow, 
 			      ack_type, &tidrecvc->ctrl_msg_queued, args);
 
   /* Update stats for expected window */
@@ -855,7 +882,6 @@ parse_ip_or_lid(char *buf, size_t len, uint32_t ip, psm_epid_t epid)
 static void 
 _process_err_chk_bad(ips_epaddr_t *ipsaddr, struct ips_message_header *p_hdr)
 {
-    static int done_once = 0;
     uint32_t ipv4_addr = p_hdr->data[0].u32w0;
     uint32_t pid = __be32_to_cpu(p_hdr->data[0].u32w1);
     union psmi_envvar_val env_stray;
@@ -870,13 +896,12 @@ _process_err_chk_bad(ips_epaddr_t *ipsaddr, struct ips_message_header *p_hdr)
     if (!ips_proto_isconnected(ipsaddr)) {
 	int lid =  (int) psm_epid_nid(epid);
 	int context = (int) psm_epid_context(epid);
-	static int num_bogus_warnings = 0;
-	if (++num_bogus_warnings <= IPS_MAX_BOGUS_ERR_CHK_BAD)
+	if (++ipsaddr->proto->num_bogus_warnings <= IPS_MAX_BOGUS_ERR_CHK_BAD)
 	    psmi_syslog(ipsaddr->proto->ep, 1, LOG_INFO, 
 		"PSM pid %d on host %s complains that I am a stray process but "
 		"I'm not even connected to LID %d context %d (ignoring %s\n",
 		pid, buf, lid, context, 
-		num_bogus_warnings == IPS_MAX_BOGUS_ERR_CHK_BAD ? 
+		ipsaddr->proto->num_bogus_warnings == IPS_MAX_BOGUS_ERR_CHK_BAD ? 
 		"all future stray warning checks from unknown endpoints)." : 
 		").");
 	return;
@@ -886,7 +911,7 @@ _process_err_chk_bad(ips_epaddr_t *ipsaddr, struct ips_message_header *p_hdr)
      * we were connected to.  We only go through this path once.  If
      * PSM_STRAY_ENABLED=0, we'll print this warning once, if it's 1 we'll die.
     */
-    if (done_once++)
+    if (ipsaddr->proto->done_once++)
 	return;
 
     psmi_getenv("PSM_STRAY_ENABLED", "Enable stray process detection",
@@ -1056,7 +1081,7 @@ ips_proto_process_unknown(const struct ips_recvhdrq_event *rcv_ev)
 		psmi_calloc(proto->ep, UNDEFINED, 1, sizeof(struct ips_stray_epid));
 	psmi_epid_add(PSMI_EP_CROSSTALK, epid, (void *) sepid);
 	sepid->epid = epid;
-	if (stray_warn_interval)
+	if (proto->stray_warn_interval)
 	    sepid->t_first = sepid->t_warn_next = current_count;
     }
     sepid->num_messages++;
@@ -1067,7 +1092,7 @@ ips_proto_process_unknown(const struct ips_recvhdrq_event *rcv_ev)
     if (sepid->t_warn_next > current_count && ep_err != PSMI_EP_NORETURN) 
 	return 0;
 
-    sepid->t_warn_next = current_count + stray_warn_interval;
+    sepid->t_warn_next = current_count + proto->stray_warn_interval;
 
     if (p_hdr->sub_opcode == OPCODE_ERR_CHK) {
 	/* With the new err_check, we can print out extra information */
@@ -1213,11 +1238,10 @@ ips_proto_process_packet_error(struct ips_recvhdrq_event *rcv_ev)
 	case OPCODE_AM_REQUEST_NOREPLY:
 	case OPCODE_AM_REPLY:
 	  {
-	    uint32_t sequence_num = 
-	      __be32_to_cpu(p_hdr->bth[2]) & LOWER_24_BITS;
 	    ptl_epaddr_flow_t flowid = ips_proto_flowid(p_hdr);
 	    struct ips_epstate_entry *epstaddr;
 	    struct ips_flow *flow;
+	    psmi_seqnum_t sequence_num;
 	    int16_t diff;
 	    
 	    /* Obtain ipsaddr for packet */
@@ -1228,13 +1252,14 @@ ips_proto_process_packet_error(struct ips_recvhdrq_event *rcv_ev)
 	    
 	    rcv_ev->ipsaddr = epstaddr->ipsaddr;	    
 	    flow = &rcv_ev->ipsaddr->flows[flowid];
-	    diff = (int16_t) (sequence_num - flow->recv_seq_num.psn);
+	    sequence_num.val = __be32_to_cpu(p_hdr->bth[2]);
+	    diff = (int16_t) (sequence_num.pkt - flow->recv_seq_num.pkt);
 	    
 	    if (diff >= 0 && !(flow->flags & IPS_FLOW_FLAG_NAK_SEND)) {	      
 	      /* Mark flow as congested and attempt to generate NAK */
 	      flow->flags |= IPS_FLOW_FLAG_GEN_BECN;
 	      rcv_ev->ipsaddr->stats.congestion_pkts++;
-	      flow->last_seq_num.val = sequence_num;
+	      flow->last_seq_num = sequence_num;
 	      
 	      flow->flags |= IPS_FLOW_FLAG_NAK_SEND;
 	      flow->cca_ooo_pkts = 0;
@@ -1379,14 +1404,13 @@ ips_proto_process_packet_inner(struct ips_recvhdrq_event *rcv_ev)
 	    _IPATH_VDBG("got packet from %d with opcode=%x, seqno=%d\n", 
 		    p_hdr->commidx,
 		    p_hdr->sub_opcode, 
-		    __be32_to_cpu(p_hdr->bth[2]) & LOWER_24_BITS);
+		    __be32_to_cpu(p_hdr->bth[2]));
    #endif
 
             switch ( p_hdr->sub_opcode ) {
             case OPCODE_SEQ_MQ_HDR:
             case OPCODE_SEQ_MQ_CTRL:
-		_process_mq(rcv_ev);
-                ips_proto_process_ack(rcv_ev);
+		ret = _process_mq(rcv_ev);
                 break;
 
             case OPCODE_ACK:
@@ -1401,7 +1425,6 @@ ips_proto_process_packet_inner(struct ips_recvhdrq_event *rcv_ev)
 	    case OPCODE_AM_REQUEST_NOREPLY:
 	    case OPCODE_AM_REPLY:
 		ret = ips_proto_am(rcv_ev);
-		ips_proto_process_ack(rcv_ev);
 		break;
 	    case OPCODE_FLOW_CCA_BECN:
 	      {
@@ -1475,14 +1498,8 @@ ips_proto_process_packet_inner(struct ips_recvhdrq_event *rcv_ev)
 		break;
 		
 	    case OPCODE_SEQ_MQ_EXPTID_UNALIGNED:
-	      if (ips_proto_is_expected_or_nak(rcv_ev))
 		ips_protoexp_recv_unaligned_data(rcv_ev);
-	      ips_proto_process_ack(rcv_ev);
-	      /* May require ACK for this packet. */
-	      if (p_hdr->flags & IPS_SEND_FLAG_ACK_REQ) 
-		ips_proto_send_ack((struct ips_recvhdrq *) rcv_ev->recvq,
-				   &ipsaddr->flows[ips_proto_flowid(p_hdr)]);
-	      break;
+		break;
      
 	    case OPCODE_CONNECT_REQUEST:
 	    case OPCODE_CONNECT_REPLY:

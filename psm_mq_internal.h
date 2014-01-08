@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -36,14 +37,28 @@
 
 #include "psm_user.h"
 
-struct mqq {
-    psm_mq_req_t    first;
-    psm_mq_req_t    *lastp;
+#define MM_FLAG_NONE  0
+#define MM_FLAG_TRANSIENT  0x1
+#define MM_NUM_OF_POOLS 7
+
+typedef struct _mem_block_ctrl mem_block_ctrl;
+typedef struct _mem_ctrl mem_ctrl;
+    
+struct _mem_ctrl {
+    mem_block_ctrl *free_list;
+    uint32_t total_alloc;
+    uint32_t current_available;
+    uint32_t block_size;
+    uint32_t flags;
+    uint32_t replenishing_rate;
 };
 
-struct mqsq {
-    psm_mq_req_t    first;
-    psm_mq_req_t    *lastp;
+struct _mem_block_ctrl {
+    union {
+        mem_ctrl *mem_handler;
+        mem_block_ctrl *next;
+    };
+    char _redzone[PSM_VALGRIND_REDZONE_SZ];
 };
 
 typedef psm_error_t (*psm_mq_unexpected_callback_fn_t)
@@ -66,8 +81,13 @@ struct psm_mq {
     uint32_t	  ipath_thresh_rv;
     uint32_t	  shm_thresh_rv;
     uint32_t	  ipath_window_rv;
+    int		  memmode;
 
     psm_mq_stats_t	stats;	/**> MQ stats, accumulated by each PTL */
+
+    mem_ctrl handler_index[MM_NUM_OF_POOLS];
+    int      mem_ctrl_is_init;
+    uint64_t mem_ctrl_total_bytes;
 };
 
 #define MQ_IPATH_THRESH_TINY	8
@@ -94,12 +114,13 @@ struct psm_mq {
 #define MQ_MSG_TINY	1
 #define MQ_MSG_SHORT	2
 #define MQ_MSG_LONG	3
-#define MQ_MSG_RTS	6
-#define MQ_MSG_RTS_WAIT	7
-#define MQ_MSG_DATA	8
-#define MQ_MSG_RTS_EGR	9
+#define MQ_MSG_RTS	4
+#define MQ_MSG_RTS_EGR	5
+#define MQ_MSG_RTS_WAIT	6
+#define MQ_MSG_DATA	9
 #define MQ_MSG_CTS_EGR	10
 #define MQ_MSG_DATA_REQ	11
+#define MQ_MSG_DATA_BLK	12
 
 #define MQ_MSG_USER_FIRST 64
 
@@ -158,7 +179,11 @@ struct psm_mq_req {
 
     /* Used only for eager LONGs */
     STAILQ_ENTRY(psm_mq_req)    nextq; /* used for egr-long only */
-    psmi_egrid_t  egrid;
+    psmi_egrid_t egrid;
+    psm_epaddr_t epaddr;
+    uint16_t msg_seqnum;	/* msg seq num for mctxt */
+    uint8_t tid_grant[128];	/* don't change the size unless... */
+
     uint32_t recv_msglen; /* Message length we are ready to receive */
     uint32_t send_msglen; /* Message length from sender */
     uint32_t recv_msgoff; /* Message offset into buf */
@@ -316,7 +341,7 @@ void	  psmi_mq_sysbuf_getinfo(psm_mq_t mq, char *buf, size_t len);
 /*
  * Main receive progress engine, for shmops and ipath, in mq.c
  */
-psm_error_t psmi_mq_malloc(psm_ep_t ep, psm_mq_t *mqo);
+psm_error_t psmi_mq_malloc(psm_mq_t *mqo);
 psm_error_t psmi_mq_initialize_defaults(psm_mq_t mq);
 psm_error_t psmi_mq_free(psm_mq_t mq);
 
@@ -327,14 +352,24 @@ psm_error_t psmi_mq_free(psm_mq_t mq);
 #define MQ_RET_DATA_OK 3
 #define MQ_RET_DATA_OUT_OF_ORDER 4
 
+int psmi_mq_handle_outoforder_queue(psm_epaddr_t epaddr);
+int psmi_mq_handle_envelope_outoforder(psm_mq_t mq, uint16_t mode,
+		   psm_epaddr_t epaddr, uint16_t msg_seqnum,
+		   uint64_t tag, psmi_egrid_t egrid, uint32_t msglen,
+		   const void *payload, uint32_t paylen);
 int psmi_mq_handle_envelope(psm_mq_t mq, uint16_t mode, psm_epaddr_t epaddr, 
-			    uint64_t tag, psmi_egrid_t egrid, uint32_t msglen,
-			    const void *payload, uint32_t paylen);
+		   uint64_t tag, psmi_egrid_t egrid, uint32_t msglen,
+		   const void *payload, uint32_t paylen);
 int psmi_mq_handle_data(psm_mq_req_t req, psm_epaddr_t epaddr, 
-			const void *payload, uint32_t paylen);
+		   uint32_t egrid, uint32_t offset,
+		   const void *payload, uint32_t paylen);
 
 /* If rtsreq is non-NULL, it contains enough information to pull the data from
  * the initiator and signal completion at a later time */
+int psmi_mq_handle_rts_outoforder(psm_mq_t mq, uint64_t tag,
+		   uintptr_t send_buf, uint32_t send_msglen,
+		   psm_epaddr_t peer, uint16_t msg_seqnum,
+		   mq_rts_callback_fn_t cb, psm_mq_req_t *req_o);
 int psmi_mq_handle_rts(psm_mq_t mq, uint64_t tag, uintptr_t send_buf,
 		   uint32_t send_msglen, psm_epaddr_t peer, 
 		   mq_rts_callback_fn_t cb, psm_mq_req_t *req_o);
@@ -357,6 +392,25 @@ mq_req_match(struct mqsq *q, uint64_t tag, int remove)
 		    q->lastp = curp;
 		cur->next = NULL;
 	    }
+	    return cur;
+	}
+    }
+    return NULL; /* no match */
+}
+
+PSMI_ALWAYS_INLINE(
+psm_mq_req_t 
+mq_ooo_match(struct mqsq *q, uint16_t msg_seqnum)
+)
+{
+    psm_mq_req_t *curp;
+    psm_mq_req_t cur;
+
+    for (curp = &q->first; (cur = *curp) != NULL; curp = &cur->next) {
+	if (cur->msg_seqnum == msg_seqnum) { /* match! */
+	    if ((*curp = cur->next) == NULL) /* fix tail */
+		q->lastp = curp;
+	    cur->next = NULL;
 	    return cur;
 	}
     }

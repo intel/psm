@@ -168,7 +168,7 @@ ips_protoexp_init(const psmi_context_t *context,
       
       end_flow = start_flow + num_flow;
       
-      if ((err = ips_tf_init(&protoexp->tfctrl,
+      if ((err = ips_tf_init(context, &protoexp->tfctrl,
 			     start_flow, end_flow,
 			     ips_tid_flowavail_callback, protoexp)))
 	goto fail;
@@ -253,7 +253,7 @@ ips_protoexp_init(const psmi_context_t *context,
 	struct psmi_rlimit_mpool rlim = TID_SENDSESSIONS_LIMITS;
 	uint32_t maxsz, chunksz;
 
-	if ((err = psmi_ep_parse_mpool_env(protoexp->proto->ep, 1,
+	if ((err = psmi_parse_mpool_env(protoexp->proto->mq, 1,
 					   &rlim,  &maxsz, &chunksz)))
 	    goto fail;
 				    
@@ -280,7 +280,7 @@ ips_protoexp_init(const psmi_context_t *context,
 	struct psmi_rlimit_mpool rlim = TID_RECVSESSIONS_LIMITS;
 	uint32_t maxsz, chunksz;
 
-	if ((err = psmi_ep_parse_mpool_env(protoexp->proto->ep, 1,
+	if ((err = psmi_parse_mpool_env(protoexp->proto->mq, 1,
 					   &rlim,  &maxsz, &chunksz)))
 	    goto fail;
 				    
@@ -529,13 +529,14 @@ ips_protoexp_tid_get_from_token(
 	    struct ips_protoexp *protoexp,
 	    void		*buf,
 	    uint32_t		 length,
-	    ips_epaddr_t	*ipsaddr,
+	    psm_epaddr_t	 epaddr,
 	    uint32_t		 remote_tok,
 	    uint32_t		 flags,
 	    ips_tid_completion_callback_t callback,
 	    void			  *context)
 {
     struct ips_tid_get_request *getreq;
+    int count, fragsize;
 
     getreq = (struct ips_tid_get_request *) 
 	     psmi_mpool_get(protoexp->tid_getreq_pool);
@@ -547,10 +548,9 @@ ips_protoexp_tid_get_from_token(
 	    "Ran out of 'getreq' descriptors");
 
     getreq->tidgr_protoexp  = protoexp;
+    getreq->tidgr_epaddr    = epaddr;
     getreq->tidgr_lbuf	    = buf;
     getreq->tidgr_length    = length;
-    getreq->tidgr_rndv_winsz= ipsaddr->mq->ipath_window_rv;
-    getreq->tidgr_epaddr    = ipsaddr;
     getreq->tidgr_sendtoken = remote_tok;
     getreq->tidgr_ucontext  = context;
     getreq->tidgr_callback  = callback;
@@ -559,11 +559,13 @@ ips_protoexp_tid_get_from_token(
     getreq->tidgr_desc_seqno= 0;
     getreq->tidgr_flags     = flags; 
 
-    /* Create a place holder flow for this get request */
-    ips_flow_init(&getreq->flow, NULL, ipsaddr,
-		  PSM_TRANSFER_DMA, PSM_PROTOCOL_TIDFLOW, 
-		  IPS_PATH_LOW_PRIORITY, 0);
-    
+    /* nsconn is the # of slave channels. */
+    /* fragsize is the bytes each channel should transfer. */
+    count = epaddr->mctxt_master->mctxt_nsconn;
+    fragsize = (length+count)/(count+1);
+    if (fragsize < 4096) fragsize = 4096;
+    getreq->tidgr_rndv_winsz= min(fragsize, epaddr->ep->mq->ipath_window_rv);
+
     STAILQ_INSERT_TAIL(&protoexp->pend_getreqsq, getreq, tidgr_next);
     if (ips_tid_num_available(&protoexp->tidc) >=
 	    ips_tid_num_required(&protoexp->tidc, (void *) NULL,
@@ -575,41 +577,33 @@ ips_protoexp_tid_get_from_token(
     return PSM_OK;
 }
 
-static struct {
-    uint32_t	interval_secs;
-    uint64_t	next_warning;
-    uint64_t	count;
-}
-psmi_logevent_tid_send_reqs = 
-    { 15, 0, 0 }; 
-
 /* List of perf events */
 #define _ips_logeventid_tid_send_reqs	0   /* out of tid send descriptors */
 
 #define ips_logevent_id(event)	 _ips_logeventid_ ## event
-#define ips_logevent(event,ptr) ips_logevent_inner(ips_logevent_id(event), ptr)
+#define ips_logevent(proto, event,ptr) ips_logevent_inner(proto, ips_logevent_id(event), ptr)
 
 static
 void
-ips_logevent_inner(int eventid, void *context)
+ips_logevent_inner(struct ips_proto *proto, int eventid, void *context)
 {
     uint64_t t_now = get_cycles();
 
     switch (eventid) {
 	case ips_logevent_id(tid_send_reqs): {
 	    ips_epaddr_t *ipsaddr = (ips_epaddr_t *) context;
-	    psmi_logevent_tid_send_reqs.count++;
+	    proto->psmi_logevent_tid_send_reqs.count++;
 
-	    if (t_now >= psmi_logevent_tid_send_reqs.next_warning) {
+	    if (t_now >= proto->psmi_logevent_tid_send_reqs.next_warning) {
 		psmi_handle_error(PSMI_EP_LOGEVENT, PSM_OK,
 		    "Non-fatal temporary exhaustion of send tid dma descriptors "
 		    "(elapsed=%.3fs, source LID=0x%x/context=%d, count=%lld)", 
 		    (double) cycles_to_nanosecs(t_now - ipsaddr->proto->t_init) / 1.0e9,
 		    (int) psm_epid_nid(ipsaddr->epaddr->epid), 
 		    (int) psm_epid_context(ipsaddr->epaddr->epid),
-		    (long long) psmi_logevent_tid_send_reqs.count);
-		psmi_logevent_tid_send_reqs.next_warning = t_now + 
-		    sec_2_cycles(psmi_logevent_tid_send_reqs.interval_secs);
+		    (long long) proto->psmi_logevent_tid_send_reqs.count);
+		proto->psmi_logevent_tid_send_reqs.next_warning = t_now + 
+		    sec_2_cycles(proto->psmi_logevent_tid_send_reqs.interval_secs);
 	    }
 	}
 	break;
@@ -646,6 +640,7 @@ ips_protoexp_tid_grant(const struct ips_recvhdrq_event *rcv_ev)
     psm_error_t err = PSM_OK;
     psm_mq_req_t req;
     ptl_arg_t args[3];
+    uint8_t index, seqno;
 
     paylen   = ips_recvhdrq_event_paylen(rcv_ev);
     tid_list = (ips_tid_session_list *) ips_recvhdrq_event_payload(rcv_ev);
@@ -655,7 +650,9 @@ ips_protoexp_tid_grant(const struct ips_recvhdrq_event *rcv_ev)
     
     /* Increment grant received stats for endpoint */
     ipsaddr->stats.tids_grant_recv++;
-    
+    index = tid_list->tsess_seqno % sizeof(req->tid_grant);
+    seqno = tid_list->tsess_seqno / sizeof(req->tid_grant);
+
     req = psmi_mpool_find_obj_by_index(protoexp->tid_sreq_pool, reqidx);
 
     _IPATH_VDBG("req=%p (%d) wait=%s req_seqno=%d pkt_len=%d, seqno=%d, msglen=%d\n", 
@@ -667,25 +664,26 @@ ips_protoexp_tid_grant(const struct ips_recvhdrq_event *rcv_ev)
     if (req == NULL) {
 	/* Not found, bogus req, ack it anyway */
     }
-    else if (tid_list->tsess_seqno < req->recv_msgoff) {
+    else if (seqno < req->tid_grant[index]) {
 	/* dupe, ack it */
     }
-    else if (tid_list->tsess_seqno > req->recv_msgoff) { 
+    else if (seqno > req->tid_grant[index]) {
 	/* lost tidreq, wait for rexmit */
 	/* XXX count this to see if it's worth handling instead of dropping */
 	goto no_ack;
     }
     else {
+	req->tid_grant[index]++;
 	/* Safe to keep updating every time */
 	req->send_msglen = msglen;
 	if ((err = ips_tid_send_handle_tidreq(protoexp, req, msglen, 0, ipsaddr, flowgenseq, tid_list, paylen)) != PSM_OK)
         {
-	    ips_logevent(tid_send_reqs, ipsaddr);
+	    ips_logevent(rcv_ev->proto, tid_send_reqs, ipsaddr);
 	    /* Out of send reqs, wait for rexmit */
 	    goto no_ack;
 	}
 	req->recv_msgoff = tid_list->tsess_seqno + 1;
-	psmi_logevent_tid_send_reqs.next_warning = 0;
+	rcv_ev->proto->psmi_logevent_tid_send_reqs.next_warning = 0;
     }
 
     /* At this point we can ack the request */
@@ -734,17 +732,20 @@ ips_protoexp_tid_grant_ack(const struct ips_recvhdrq_event *rcv_ev)
 
 void
 __fastpath
-ips_protoexp_recv_unaligned_data(const struct ips_recvhdrq_event *rcv_ev)
+ips_protoexp_recv_unaligned_data(struct ips_recvhdrq_event *rcv_ev)
 {
   
   struct ips_protoexp *protoexp = rcv_ev->proto->protoexp;
   struct ips_message_header *p_hdr = rcv_ev->p_hdr;
+  struct ptl_epaddr *ipsaddr = rcv_ev->ipsaddr;
   uint32_t tid_recv_sessid;
   struct ips_tid_recv_desc *tidrecvc;
   ptl_arg_t desc_id = rcv_ev->p_hdr->data[0];
   int i;
   uint8_t *byte_index = (uint8_t *) &p_hdr->data[1].u32w0;
   uint8_t *buffer;
+
+  if (!ips_proto_is_expected_or_nak(rcv_ev)) goto process_ack;
 
   psmi_assert(p_hdr->flags & (IPS_SEND_FLAG_UNALIGNED_DATA | IPS_SEND_FLAG_ACK_REQ));
   
@@ -756,7 +757,7 @@ ips_protoexp_recv_unaligned_data(const struct ips_recvhdrq_event *rcv_ev)
   if_pf (tidrecvc == NULL) {
     _IPATH_ERROR("No tidrecv session with index %d\n",
 		 tid_recv_sessid);
-    return;
+    goto process_ack;
   }
   
   if_pf (psmi_mpool_get_obj_gen_count(tidrecvc) != desc_id._desc_genc) {
@@ -764,7 +765,7 @@ ips_protoexp_recv_unaligned_data(const struct ips_recvhdrq_event *rcv_ev)
 		 "of %d; skipping\n", tid_recv_sessid,
 		 psmi_mpool_get_obj_gen_count(tidrecvc), 
 		 desc_id._desc_genc);
-      return; /* skip */
+      goto process_ack; /* skip */
   }
   
   psmi_assert(p_hdr->hdr_dlen == 
@@ -795,7 +796,15 @@ ips_protoexp_recv_unaligned_data(const struct ips_recvhdrq_event *rcv_ev)
     psmi_assert_always(ips_recvhdrq_event_paylen(rcv_ev));
     tidrecvc->cksum = *cksum;
   }
-  
+ 
+process_ack:
+  ips_proto_process_ack(rcv_ev);
+  /* May require ACK for this packet. */
+  if (p_hdr->flags & IPS_SEND_FLAG_ACK_REQ)
+    ips_proto_send_ack((struct ips_recvhdrq *) rcv_ev->recvq,
+		&ipsaddr->flows[ips_proto_flowid(p_hdr)]);
+
+  return;
 }
 
 void
@@ -838,7 +847,7 @@ ips_protoexp_data(struct ips_recvhdrq_event *rcv_ev)
       return; /* skip */
     }
     
-    sequence_num.psn = __be32_to_cpu(p_hdr->bth[2]);
+    sequence_num.val = __be32_to_cpu(p_hdr->bth[2]);
     expected_sequence_num = tidrecvc->tidflow_genseq;
     
     /* On QLE73XX this is only called if data was fully received or the ACK
@@ -870,7 +879,7 @@ ips_protoexp_data(struct ips_recvhdrq_event *rcv_ev)
     /* IBTA CCA handling for expected flow. */
     if (rcv_ev->is_congested & IPS_RECV_EVENT_FECN) {
       /* Mark flow to generate BECN in control packet */
-      tidrecvc->getreq->flow.flags |= IPS_FLOW_FLAG_GEN_BECN;
+      tidrecvc->ipsaddr->tidgr_flow.flags |= IPS_FLOW_FLAG_GEN_BECN;
       /* Update stats for congestion encountered */
       rcv_ev->ipsaddr->stats.congestion_pkts++;
       /* Clear FECN event */
@@ -895,7 +904,8 @@ ips_protoexp_data(struct ips_recvhdrq_event *rcv_ev)
       
       /* On QLE71XX/QLE72XX update tidflow table in software */
       if (!has_hw_hdrsupp) 
-	ipath_tidflow_set_entry(tidrecvc->tidflow_idx,
+	ipath_tidflow_set_entry(tidrecvc->context->ctrl,
+				tidrecvc->tidflow_idx,
 				tidrecvc->tidflow_genseq.gen,
 				tidrecvc->tidflow_genseq.seq); 
       
@@ -948,13 +958,13 @@ ips_protoexp_data(struct ips_recvhdrq_event *rcv_ev)
      * congestion. The ACK in this case will have the BECN bit set. 
      */
     if ((p_hdr->flags & IPS_SEND_FLAG_ACK_REQ) ||
-	(tidrecvc->getreq->flow.flags & IPS_FLOW_FLAG_GEN_BECN)) {
+	(tidrecvc->ipsaddr->tidgr_flow.flags & IPS_FLOW_FLAG_GEN_BECN)) {
       
       /* Ack sender with descriptor index */
       args[0] = send_descid;
       args[1] = tidrecvc->tid_list.tsess_descid;
       
-      ips_proto_send_ctrl_message(&tidrecvc->getreq->flow,
+      ips_proto_send_ctrl_message(&tidrecvc->ipsaddr->tidgr_flow,
 				  OPCODE_ACK,
 				  &tidrecvc->ctrl_msg_queued, args);
     }
@@ -1031,7 +1041,8 @@ ips_tid_send_tid_release_msg(struct ips_tid_send_desc *tidsendc)
   desc_id[1] = tidsendc->descid;
   desc_id[2].u32w0 = tidsendc->release_cnt;
   
-  err = ips_proto_send_ctrl_message(&tidsendc->epaddr->flows[protoexp->tid_ep_flow],
+  err = ips_proto_send_ctrl_message(&tidsendc->ipsaddr->
+				    flows[protoexp->tid_ep_flow],
 				    OPCODE_TIDS_RELEASE,
 				    &tidsendc->ctrl_msg_queued,
 				    desc_id);
@@ -1058,7 +1069,7 @@ ips_tid_send_tid_release_msg(struct ips_tid_send_desc *tidsendc)
 
 static
 int __fastpath 
-ips_tid_send_completion_unaligned_callback(void * param)
+ips_tid_send_completion_unaligned_callback(void * param, uint32_t nbytes)
 {
   struct ips_tid_send_desc *tidsendc = (struct ips_tid_send_desc *) param;
   
@@ -1075,13 +1086,15 @@ ips_tid_send_completion_unaligned_callback(void * param)
 
 static
 int __fastpath 
-ips_tid_send_completion_callback(void * param)
+ips_tid_send_completion_callback(void * param, uint32_t nbytes)
 {
     struct ips_tid_send_desc *tidsendc = (struct ips_tid_send_desc *) param;
     struct ips_protoexp *protoexp = tidsendc->protoexp;
     
     if (protoexp->tid_xfer_type == PSM_TRANSFER_DMA)
 	ips_proto_dma_wait_until(protoexp->proto, tidsendc->iovec_cntr_last);
+
+    if (tidsendc->bounce_buf) psmi_free(tidsendc->bounce_buf);
 
     /* Decrement completion counter and complete if unaligned data sent */
     tidsendc->completion_counter--;
@@ -1110,7 +1123,8 @@ ips_tid_release_timer_callback(struct psmi_timer *timer, uint64_t current)
     desc_id[1] = tidsendc->descid;
     desc_id[2].u32w0 = tidsendc->release_cnt;
 
-    err = ips_proto_send_ctrl_message(&tidsendc->epaddr->flows[protoexp->tid_ep_flow],
+    err = ips_proto_send_ctrl_message(&tidsendc->ipsaddr->
+				      flows[protoexp->tid_ep_flow],
 				      OPCODE_TIDS_RELEASE,
 				      &tidsendc->ctrl_msg_queued,
 				      desc_id);
@@ -1139,11 +1153,10 @@ ips_tid_grant_timer_callback(struct psmi_timer *timer, uint64_t current)
 {
     struct ips_tid_recv_desc *tidrecvc = 
 	(struct ips_tid_recv_desc *) timer->context;
-    struct ips_tid_get_request  *getreq = tidrecvc->getreq;
-    struct ips_protoexp *protoexp = getreq->tidgr_protoexp;
+    struct ips_protoexp *protoexp = tidrecvc->protoexp;
+    ips_epaddr_t *ipsaddr = tidrecvc->ipsaddr;
     psm_error_t err;
     uint64_t t_cyc;
-    ips_epaddr_t *ipsaddr = getreq->tidgr_epaddr;
 
     err = ips_proto_send_ctrl_message(&ipsaddr->flows[protoexp->tid_ep_flow], 
 				      OPCODE_TIDS_GRANT,
@@ -1196,9 +1209,10 @@ ips_tid_send_handle_tidreq(struct ips_protoexp *protoexp,
     tid_list = &tidsendc->tid_list;
 
     tidsendc->length   = tid_list->tsess_length;
-    tidsendc->epaddr   = ipsaddr;
+    tidsendc->ipsaddr   = ipsaddr;
     tidsendc->mqreq    = req;
-    tidsendc->buffer     = 
+    tidsendc->bounce_buf = NULL;
+    tidsendc->buffer     =
 	    (void *)((uintptr_t)req->buf + tid_list->tsess_srcoff);
     tidsendc->tid_idx    = 0;
     tidsendc->is_complete= 0;
@@ -1209,6 +1223,8 @@ ips_tid_send_handle_tidreq(struct ips_protoexp *protoexp,
 		  PSM_PROTOCOL_TIDFLOW, IPS_PATH_LOW_PRIORITY, 0);
     
     tidsendc->tidflow.xmit_seq_num = flowgenseq;
+    tidsendc->tidflow.xmit_ack_num = flowgenseq;
+    tidsendc->tidflow.xmit_ack_num.seq--; /* last acked */
     tidsendc->ctrl_msg_queued = 0;
     tidsendc->completion_counter = 1;
     
@@ -1308,7 +1324,7 @@ ips_scb_send_unaligned_data(ips_scb_t *scb)
   uint8_t *unptr_beg = bufptr;
   uint8_t *unptr_end = bufptr + tidsendc->length - 
     tidsendc->tid_list.tsess_unaligned_end;
-  struct ips_flow *flow = &tidsendc->epaddr->flows[EP_FLOW_GO_BACK_N_PIO];
+  struct ips_flow *flow = &tidsendc->ipsaddr->flows[EP_FLOW_GO_BACK_N_PIO];
   
   psmi_assert(tidsendc->tid_idx == 0);
   
@@ -1339,7 +1355,6 @@ ips_scb_send_unaligned_data(ips_scb_t *scb)
   for (i = 0; i < tidsendc->tid_list.tsess_unaligned_end; i++)
     packptr[i] = unptr_end[i];
   
-  ips_scb_epaddr(scb) = tidsendc->epaddr;
   ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_EXPTID_UNALIGNED;
   ips_scb_hdr_dlen(scb) = tidsendc->tid_list.tsess_unaligned_start + 
     tidsendc->tid_list.tsess_unaligned_end;
@@ -1371,9 +1386,9 @@ ips_scb_prepare_tid_sendctrl(struct ips_flow *flow,
 {
     struct ips_protoexp *protoexp = tidsendc->protoexp;
     uint8_t *bufptr = tidsendc->buffer;
-    uint16_t frame_len, frame_off;
+    uint16_t frame_len, frag_size, nfrag;
+    int payload_size, idx;
     ips_scb_t *scb;
-    uint32_t scb_flags = IPS_SEND_FLAG_HDR_SUPPRESS;
 
     if ((scb = ips_scbctrl_alloc(&protoexp->tid_scbc_rv, 1, 0, 0)) == NULL)
 	return NULL;
@@ -1415,83 +1430,112 @@ ips_scb_prepare_tid_sendctrl(struct ips_flow *flow,
 	return NULL;
     }
     
-    frame_len = min(tidsendc->remaining_bytes_in_page, 
-		    min(protoexp->tid_send_fragsize, flow->path->epr_mtu));
-    scb->offset = frame_off = tidsendc->offset;
+    if ((uintptr_t)bufptr & 0x3) {
+	bufptr = psmi_malloc(protoexp->proto->ep,
+		UNDEFINED, tidsendc->remaining_bytes);
+	if (!bufptr) {
+	    ips_scbctrl_free(scb);
+	    return NULL;
+	}
 
-    if (frame_off & 0xF) 
-	frame_len = min(frame_len, (16 - (frame_off & 0xF)));
+	memcpy(bufptr, tidsendc->buffer, tidsendc->remaining_bytes);
+	tidsendc->buffer = tidsendc->bounce_buf = bufptr;
+    }
 
-    /* XXX check for sdma */
-    psmi_assert_always(frame_len <= 4096);
-
-    _IPATH_VDBG("tidsess=%6d tid=%4d @ %3d size=%4d offset=%4d, frame_len=%4d\n",
-	tidsendc->descid.u32w0, 
-	tidsendc->tid_list.tsess_list[tidsendc->tid_idx].tid, tidsendc->tid_idx,
-	tidsendc->tid_list.tsess_list[tidsendc->tid_idx].length,
-	tidsendc->tid_list.tsess_list[tidsendc->tid_idx].offset, frame_len);
-    
-    scb->payload      = (void *) bufptr;
-    scb->payload_size = frame_len;
+    idx = tidsendc->tid_idx;
     scb->tidsendc     = tidsendc;
-    scb->epaddr       = tidsendc->epaddr;
     SLIST_NEXT(scb,next) = NULL;
 
+    scb->ips_lrh.sub_opcode = OPCODE_SEQ_MQ_EXPTID;
+    scb->ips_lrh.data[0] = tidsendc->tid_list.tsess_descid;
+    scb->ips_lrh.data[1] = tidsendc->descid;
+    scb->tid	         = tidsendc->tid_list.tsess_list[idx].tid;
+    scb->tsess		 = (void *)&tidsendc->tid_list.tsess_list[idx];
+    scb->offset		 = tidsendc->offset;
+    scb->payload         = (void *) bufptr;
+
+    /*
+     * Loop over the tid session list, count the frag number and payload size.
+     * The payload size is limited by the pbc.length field which is 16 bits in
+     * DWORD, including both message header and payload. This translates to
+     * less than 256K payload. So 128K is used.
+     */
+    nfrag = 0;
+    payload_size = 0;
+    frag_size = min(protoexp->tid_send_fragsize, flow->path->epr_mtu);
+    frame_len = min(tidsendc->remaining_bytes_in_page, frag_size);
+    while (1) {
+	nfrag++;
+	payload_size += frame_len;
+
+	/* adjust counter and pointers */
+	tidsendc->remaining_bytes -= frame_len;
+	tidsendc->remaining_bytes_in_page -= frame_len;
+	tidsendc->offset += frame_len;
+
+	if (!tidsendc->remaining_bytes_in_page) { 
+	    /* Done with this page, move on to the next tid */
+	    tidsendc->tid_idx++;
+	    tidsendc->remaining_bytes_in_page = 
+		tidsendc->tid_list.tsess_list[tidsendc->tid_idx].length;
+	    tidsendc->offset =
+		tidsendc->tid_list.tsess_list[tidsendc->tid_idx].offset;
+
+	    /* The payload size is limited by the pbc.length field which
+	     * is 16 bits in DWORD, including both message header and
+	     * payload. This translates to less than 256K payload. So 128K
+	     * is used. */
+	    /* break when current page is done */
+	    if (payload_size > 131072) break;
+	}
+
+#if 0	//source code backdoor 
+	if (1) {
+#else
+	if (flow->transfer == PSM_TRANSFER_PIO) {
+#endif
+	    break;	/* turn on to use single frag-size packet */
+	}
+
+	if (!tidsendc->remaining_bytes) break;
+	frame_len = min(tidsendc->remaining_bytes_in_page, frag_size);
+    }
+    scb->nfrag = nfrag;
+    scb->frag_size = frag_size;
+    scb->payload_size = payload_size;
+    scb->tsess_length = sizeof(ips_tid_session_member) *
+				(tidsendc->tid_idx - idx);
+
+    /* Keep track of latest buffer location so we restart at the
+     * right location, if we don't complete the transfer */
+    tidsendc->buffer = bufptr + payload_size;
+
     /* If last packet, we want a completion notification */
-    if (tidsendc->remaining_bytes == frame_len) {
-        /* Last packet. Do not suppress header AND request an ACK. */
-        scb_flags    &= ~IPS_SEND_FLAG_HDR_SUPPRESS;
-	scb_flags    |= (IPS_SEND_FLAG_ACK_REQ | IPS_SEND_FLAG_EXPECTED_DONE);
-	
+    if (!tidsendc->remaining_bytes) {
+	scb->flags = (IPS_SEND_FLAG_ACK_REQ | IPS_SEND_FLAG_EXPECTED_DONE);
 	scb->callback = ips_tid_send_completion_callback;
 	scb->cb_param = tidsendc;
 	
 	tidsendc->is_complete = 1;
-    }
-    else {
+    } else {
+	scb->flags = IPS_SEND_FLAG_HDR_SUPPRESS;
 	scb->callback = NULL;
 	scb->cb_param = NULL;
     }
-	
-    
-    /* Do not suppress header every hdr_pkt_interval or the last packet */
-    if ((++tidsendc->frame_send % protoexp->hdr_pkt_interval) == 0) {
-      scb_flags &= ~IPS_SEND_FLAG_HDR_SUPPRESS;
-      scb_flags |= IPS_SEND_FLAG_ACK_REQ; /* Request an ACK */
-    }
-    
-    scb->flags           = scb_flags;
-    scb->ips_lrh.sub_opcode = OPCODE_SEQ_MQ_EXPTID;
-    scb->ips_lrh.data[0] = tidsendc->tid_list.tsess_descid;
-    scb->ips_lrh.data[1] = tidsendc->descid;
-    scb->tid	         = tidsendc->tid_list.tsess_list[tidsendc->tid_idx].tid;
 
-    /* adjust counter and pointers */
-    tidsendc->remaining_bytes -= frame_len;
-    tidsendc->remaining_bytes_in_page -= frame_len;
-    tidsendc->offset += frame_len;
-
-    /* Keep track of latest buffer location so we restart at the
-     * right location, if we don't complete the transfer */
-    tidsendc->buffer = bufptr + frame_len;
-
-    if (!tidsendc->remaining_bytes_in_page) { 
-	/* Done with this page, move on to the next tid */
-	tidsendc->tid_idx++;
-	tidsendc->remaining_bytes_in_page = 
-	    tidsendc->tid_list.tsess_list[tidsendc->tid_idx].length;
-	tidsendc->offset = 
-		tidsendc->tid_list.tsess_list[tidsendc->tid_idx].offset;
-#if 0
-	_IPATH_VDBG("tidsess=%6d tid=%4d @ %3d size=%4d offset=%4d\n",
-	    tidsendc->descid._desc_idx, 
-	    tidsendc->tid_list.tsess_list[tidsendc->tid_idx].tid,
-	    tidsendc->tid_idx,
-	    tidsendc->tid_list.tsess_list[tidsendc->tid_idx].length,
-	    tidsendc->tid_list.tsess_list[tidsendc->tid_idx].offset);
+#if 0	//source code backdoor
+    if (1) {
+#else
+    if (flow->transfer == PSM_TRANSFER_PIO) {
 #endif
+	/* turn on to use single frag-size packet */
+	/* Do not suppress header every hdr_pkt_interval or the last packet */
+	if ((++tidsendc->frame_send % protoexp->hdr_pkt_interval) == 0) {
+	    scb->flags &= ~IPS_SEND_FLAG_HDR_SUPPRESS;
+	    scb->flags |= IPS_SEND_FLAG_ACK_REQ; /* Request an ACK */
+	}
     }
-
+ 
     return scb;
 }
 
@@ -1645,16 +1689,28 @@ ips_tid_recv_alloc_frag(struct ips_protoexp *protoexp,
     int i;
     psm_error_t err = PSM_OK;
 
-    psmi_assert_always(buflen > 0);
-
-    tid_list->tsess_unaligned_start = unalignment = 
+    /*
+     * The following remaining_buffer_size calculation
+     * does not work with buflen<4 and byte aligned
+     * buf, it can get negative value.
+     * In function ips_tid_pendtids_timer_callback(),
+     * we try to avoid nbytes_this(which is buflen)
+     * to be a few bytes.
+     */
+    if (buflen < 4) {
+	tid_list->tsess_unaligned_start = buflen;
+	tid_list->tsess_unaligned_end = 0;
+	remaining_buffer_size = 0;
+    } else {
+	tid_list->tsess_unaligned_start = unalignment = 
 	    ((uintptr_t) buf & 3) ? (4 - ((uintptr_t) buf & 3)) : 0;
-    remaining_buffer_size -= unalignment;
-    bufptr += unalignment;
+	remaining_buffer_size -= unalignment;
+	bufptr += unalignment;
 			
-    tid_list->tsess_unaligned_end = unalignment = 
+	tid_list->tsess_unaligned_end = unalignment = 
 	    remaining_buffer_size & 3;
-    remaining_buffer_size -= unalignment;
+	remaining_buffer_size -= unalignment;
+    }
 
     bufmap = bufptr;
     psmi_assert_always(ips_tid_num_required(&protoexp->tidc, bufmap, 
@@ -1709,18 +1765,20 @@ ips_tid_mpool_tidrecv_callback(void *context)
 static
 __fastpath 
 struct ips_tid_recv_desc *
-ips_tid_recv_alloc(const struct ips_tid_get_request *getreq, uint32_t nbytes_this)
+ips_tid_recv_alloc(struct ips_protoexp *protoexp, ips_epaddr_t *ipsaddr,
+	const struct ips_tid_get_request *getreq, uint32_t nbytes_this)
 {
     struct ips_tid_recv_desc *tidrecvc;
     psm_error_t err = PSM_OK;
-    struct ips_protoexp *protoexp = getreq->tidgr_protoexp;
     
     tidrecvc = (struct ips_tid_recv_desc *)
 		psmi_mpool_get(protoexp->tid_desc_recv_pool);
     if (tidrecvc == NULL)
         return NULL;
 
+    tidrecvc->context = &protoexp->proto->ep->context;
     tidrecvc->protoexp = protoexp;
+    tidrecvc->ipsaddr = ipsaddr;
     tidrecvc->state = TIDRECVC_STATE_GRANT;
     tidrecvc->buffer = 
 	(void *)((uintptr_t) getreq->tidgr_lbuf + getreq->tidgr_offset);
@@ -1752,7 +1810,8 @@ ips_tid_recv_alloc(const struct ips_tid_get_request *getreq, uint32_t nbytes_thi
     tidrecvc->tidflow_genseq.gen  = tidrecvc->tidflow_active_gen;
     tidrecvc->tidflow_genseq.seq  = rand_r(&protoexp->tidflow_seed) & 0x3ff;
 
-    ipath_tidflow_set_entry(tidrecvc->tidflow_genseq.flow,
+    ipath_tidflow_set_entry(tidrecvc->context->ctrl,
+			    tidrecvc->tidflow_genseq.flow,
 			    tidrecvc->tidflow_genseq.gen,
 			    tidrecvc->tidflow_genseq.seq);
     
@@ -1821,28 +1880,45 @@ ips_tid_pendtids_timer_callback(struct psmi_timer *timer, uint64_t current)
     struct ips_tid_get_pend *phead = &protoexp->pend_getreqsq;
     struct ips_tid_get_request *getreq;
     struct ips_tid_recv_desc *tidrecvc;
-    uint32_t nbytes_this;
+    uint32_t nbytes_this, leftover;
     uint64_t t_cyc;
     uintptr_t bufptr;
+    psm_epaddr_t epaddr;
     ptl_epaddr_t *ipsaddr;
     psm_error_t err = PSM_OK;
 
     while (!STAILQ_EMPTY(phead)) {
 	getreq = STAILQ_FIRST(phead);
-	ipsaddr = getreq->tidgr_epaddr;
+	epaddr = getreq->tidgr_epaddr;
+
+next_epaddr:
+	ipsaddr = epaddr->ptladdr;
+	protoexp = ipsaddr->proto->protoexp;
 	nbytes_this = min(getreq->tidgr_length - getreq->tidgr_offset,
 			  getreq->tidgr_rndv_winsz);
+	/*
+ 	 * if the leftover is less than half window size,
+ 	 * we reduce nbytes_this by half, we want to avoid
+ 	 * to send a few bytes in a tid transaction.
+ 	 */
+	leftover = getreq->tidgr_length -
+			(getreq->tidgr_offset + nbytes_this);
+	if (leftover && leftover < getreq->tidgr_rndv_winsz/2) {
+		nbytes_this /= 2;
+	}
 
 	bufptr = (uintptr_t) getreq->tidgr_lbuf + getreq->tidgr_offset;
 
 	if ((ips_tid_num_required(&protoexp->tidc, (void *) bufptr, nbytes_this) > ips_tid_num_available(&protoexp->tidc)) ||
-	    !ips_tf_available(&protoexp->tfctrl))
+	    !ips_tf_available(&protoexp->tfctrl)) {
 	  /* We're out of tids/tidflow, tid release will requeue the callback */
-	  break;
-	
-	if ((tidrecvc = ips_tid_recv_alloc(getreq, nbytes_this)) != NULL) {
+	  ;
+	}
+	else if ((tidrecvc = ips_tid_recv_alloc(protoexp, ipsaddr,
+				getreq, nbytes_this)) != NULL) {
 
-	  err = ips_proto_send_ctrl_message(&ipsaddr->flows[protoexp->tid_ep_flow],
+	    err = ips_proto_send_ctrl_message(&ipsaddr->
+					    flows[protoexp->tid_ep_flow],
 					    OPCODE_TIDS_GRANT,
 					    &tidrecvc->ctrl_msg_queued, 
 					    &tidrecvc->tid_list);
@@ -1864,14 +1940,24 @@ ips_tid_pendtids_timer_callback(struct psmi_timer *timer, uint64_t current)
 			getreq->tidgr_offset, nbytes_this, getreq->tidgr_length);
 
 	    getreq->tidgr_desc_seqno++;
-	    if (getreq->tidgr_offset == getreq->tidgr_length) 
+	    if (getreq->tidgr_offset == getreq->tidgr_length) {
+		getreq->tidgr_protoexp = NULL;
+		getreq->tidgr_epaddr = NULL;
 		STAILQ_REMOVE_HEAD(phead, tidgr_next);
+		continue;
+	    }
+	    epaddr = epaddr->mctxt_next;
+	    goto next_epaddr;
 	}
 	else {
 	    /* out of tidrecv desc.  The not-empty tidrecv mpool callback will
 	     * cause us to requeue the getreq on the active timer queue */
-	    break;
+	    ;
 	}
+
+	epaddr = epaddr->mctxt_next;
+	if (epaddr != getreq->tidgr_epaddr) goto next_epaddr;
+	break;
     }
     return PSM_OK; /* XXX err-broken */
 }
@@ -1894,7 +1980,7 @@ ips_tid_recv_free(struct ips_tid_recv_desc *tidrecvc)
 					 0xffffffff);
       if (tidrecvc->cksum != cksum) {
 	psmi_handle_error(PSMI_EP_NORETURN, PSM_INTERNAL_ERR,
-			  "ErrPkt: Checksum mismatch. Expected: 0x%08x, Received: 0x%08x Source LID: %i. Rendezvous stats: nSeqErr: %d, nGenErr: %d, nReXmits: %d, nErrChkGen: %d. Aborting! \n", tidrecvc->cksum, cksum, __be16_to_cpu(tidrecvc->getreq->flow.path->epr_dlid), tidrecvc->stats.nSeqErr, tidrecvc->stats.nGenErr, tidrecvc->stats.nReXmit, tidrecvc->stats.nErrChkReceived);
+			  "ErrPkt: Checksum mismatch. Expected: 0x%08x, Received: 0x%08x Source LID: %i. Rendezvous stats: nSeqErr: %d, nGenErr: %d, nReXmits: %d, nErrChkGen: %d. Aborting! \n", tidrecvc->cksum, cksum, __be16_to_cpu(tidrecvc->ipsaddr->tidgr_flow.path->epr_dlid), tidrecvc->stats.nSeqErr, tidrecvc->stats.nGenErr, tidrecvc->stats.nReXmit, tidrecvc->stats.nErrChkReceived);
 	ips_proto_dump_data(tidrecvc->buffer, tidrecvc->recv_msglen);
 	
 	/* TODO: In order to recover from this we need to restart the rendezvous
@@ -1947,9 +2033,23 @@ ips_tid_recv_free(struct ips_tid_recv_desc *tidrecvc)
 
     /* We just released some tids.  If requests are waiting on tids to be
      * freed, queue up the timer */
-    if (tidcount > 0 && !STAILQ_EMPTY(&protoexp->pend_getreqsq))
-	psmi_timer_request(protoexp->timerq, &protoexp->timer_getreqs,
-			  PSMI_TIMER_PRIO_1);
+    if (tidcount > 0) {
+	if (getreq->tidgr_offset < getreq->tidgr_length) {
+#if 0
+	    psmi_timer_request(getreq->tidgr_protoexp->timerq,
+		&getreq->tidgr_protoexp->timer_getreqs,
+		PSMI_TIMER_PRIO_1);
+#endif
+	    ips_tid_pendtids_timer_callback(
+		&getreq->tidgr_protoexp->timer_getreqs, 0);
+	}
+
+	if (!STAILQ_EMPTY(&protoexp->pend_getreqsq)) {
+	    psmi_timer_request(protoexp->timerq,
+		&protoexp->timer_getreqs,
+		PSMI_TIMER_PRIO_1);
+	}
+    }
 
 fail:
     return err;
@@ -2193,11 +2293,12 @@ ips_protoexp_handle_data_err(const struct ips_recvhdrq_event *rcv_ev)
       }
       
       /* See if CRC error for a previous packet */
-      cur_flowgenseq = ipath_tidflow_get(tidrecvc->tidflow_idx);
+      cur_flowgenseq = ipath_tidflow_get(tidrecvc->context->ctrl,
+			tidrecvc->tidflow_idx);
       tfgen = ipath_tidflow_get_genval(cur_flowgenseq);
       tfseq = ipath_tidflow_get_seqnum(cur_flowgenseq);
       
-      sequence_num.psn = __be32_to_cpu(p_hdr->bth[2]);
+      sequence_num.val = __be32_to_cpu(p_hdr->bth[2]);
      
       if ((sequence_num.gen == tfgen) && (sequence_num.seq < tfseq)) {
 	/* Try to recover the flow by restarting from previous known good 
@@ -2232,7 +2333,8 @@ ips_protoexp_flow_newgen(struct ips_tid_recv_desc *tidrecvc)
   
   /* Update tidflow table with new generation number */
   tidrecvc->tidflow_genseq.gen = tidrecvc->tidflow_active_gen;
-  ipath_tidflow_set_entry(tidrecvc->tidflow_genseq.flow,
+  ipath_tidflow_set_entry(tidrecvc->context->ctrl,
+			  tidrecvc->tidflow_genseq.flow,
 			  tidrecvc->tidflow_genseq.gen,
 			  tidrecvc->tidflow_genseq.seq);
   
@@ -2274,7 +2376,7 @@ ips_protoexp_handle_tf_seqerr(const struct ips_recvhdrq_event *rcv_ev)
     
     if (tidrecvc->state != TIDRECVC_STATE_DONE) {
       
-      sequence_num.psn = __be32_to_cpu(p_hdr->bth[2]);
+      sequence_num.val = __be32_to_cpu(p_hdr->bth[2]);
       
       /* Only care about sequence error for currently active generation */
       if (tidrecvc->tidflow_active_gen == sequence_num.gen) {
@@ -2307,7 +2409,7 @@ ips_protoexp_handle_tf_seqerr(const struct ips_recvhdrq_event *rcv_ev)
 	       (protoexp->proto->flags & IPS_PROTO_FLAG_CCA)) {
 	  _IPATH_CCADBG("Generating BECN. Number of swapped generations: %d.\n", tidrecvc->tidflow_nswap_gen);
 	  /* Mark flow to generate BECN in control packet */
-	  tidrecvc->getreq->flow.flags |= IPS_FLOW_FLAG_GEN_BECN;
+	  tidrecvc->ipsaddr->tidgr_flow.flags |= IPS_FLOW_FLAG_GEN_BECN;
 	  
 	  /* Update stats for congestion encountered */
 	  if (rcv_ev->ipsaddr)
@@ -2324,13 +2426,11 @@ ips_protoexp_handle_tf_seqerr(const struct ips_recvhdrq_event *rcv_ev)
 	args[0] = send_descid;
 	args[1] = tidrecvc->tid_list.tsess_descid;
 	args[2].u16w0 = sequence_num.gen; /* Older Gen to NAK */
-	
-	
-	
-	ips_proto_send_ctrl_message(&tidrecvc->getreq->flow, 
+
+	ips_proto_send_ctrl_message(&tidrecvc->ipsaddr->tidgr_flow, 
 				    OPCODE_NAK,
 				    &tidrecvc->ctrl_msg_queued, args);
-	
+
 	/* Update stats for retransmit */
 	tidrecvc->stats.nReXmit++;
       }

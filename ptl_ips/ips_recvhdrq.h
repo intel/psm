@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -46,6 +47,7 @@ struct ips_epstate;
 
 #define IPS_RECVHDRQ_CONTINUE   0
 #define IPS_RECVHDRQ_BREAK      1
+#define IPS_RECVHDRQ_OOO	2   /* out of order */
 #define IPS_RECVHDRQ_ELEMSZ_MAX 32  /* 128 bytes */
 #define LAST_RHF_SEQNO 13
 
@@ -107,7 +109,7 @@ struct ips_recvhdrq_state
   uint32_t hdrq_rhf_seq; 		/* QLE73XX/QLE72XX last seq */	     
   uint32_t head_update_interval;        /* Header update interval */
   uint32_t num_hdrq_done;               /* Num header queue done */
-  uint32_t pad;
+  uint32_t hdr_countdown;		/* for false-egr-full tracing */
 };
 
 /*

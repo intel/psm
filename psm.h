@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -66,9 +67,9 @@ typedef struct psm_ep *psm_ep_t;
  * psm_mq_init).  */
 typedef struct psm_mq *psm_mq_t;
 
-#define PSM_VERNO       0x010e 
+#define PSM_VERNO       0x010f 
 #define PSM_VERNO_MAJOR 0x01   
-#define PSM_VERNO_MINOR 0x0e   
+#define PSM_VERNO_MINOR 0x0f   
 
 enum psm_error {
     

@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -33,6 +34,7 @@
 
 #include <netdb.h> /* gethostbyname */
 #include "psm_user.h"
+#include "psm_mq_internal.h"
 
 int psmi_ep_device_is_enabled(const psm_ep_t ep, int devid);
 
@@ -642,13 +644,13 @@ psmi_memmode_string(int mode)
 }
 
 psm_error_t 
-psmi_ep_parse_mpool_env(const psm_ep_t ep, int level,
+psmi_parse_mpool_env(const psm_mq_t mq, int level,
 			const struct psmi_rlimit_mpool *rlim,
 		        uint32_t *valo, uint32_t *chunkszo)
 {
     uint32_t val;
     const char *env = rlim->env;
-    int mode = ep->memmode;
+    int mode = mq->memmode;
     psm_error_t err = PSM_OK;
     union psmi_envvar_val env_val;
     
@@ -662,7 +664,7 @@ psmi_ep_parse_mpool_env(const psm_ep_t ep, int level,
     val = env_val.e_uint;
     if (val < rlim->minval || val > rlim->maxval)
     {
-	err = psmi_handle_error(ep, PSM_PARAM_ERR,
+	err = psmi_handle_error(NULL, PSM_PARAM_ERR,
 		"Env. var %s=%u is invalid (valid settings in mode PSM_MEMORY=%s"
 		" are inclusively between %u and %u)", env, val,
 		psmi_memmode_string(mode), rlim->minval, rlim->maxval);
@@ -1221,10 +1223,8 @@ psmi_amopt_ctl(const void *am_obj, int optname,
   switch(optname) {
   case PSM_AM_OPT_FRAG_SZ:
     {
-      extern psm_ep_t psmi_opened_endpoint; /* in psm_endpoint.c */
-      
       /* AM object is a psm_epaddr (or NULL for global minimum sz) */
-      //psm_epaddr_t epaddr = (psm_epaddr_t) am_obj; 
+      psm_epaddr_t epaddr = (psm_epaddr_t) am_obj; 
 
       if (!get) /* Cannot set this option */
 	return psmi_handle_error(NULL, PSM_OPT_READONLY, 
@@ -1246,9 +1246,9 @@ psmi_amopt_ctl(const void *am_obj, int optname,
        * which is "correct" for all supported chips.
        */
       *((unsigned *) optval) = 
-	(psmi_opened_endpoint && 
-	 psmi_ep_device_is_enabled(psmi_opened_endpoint, PTL_DEVID_IPS)) ? 
-	(psmi_opened_endpoint->context.base_info.spi_piosize - 
+	(epaddr && 
+	 psmi_ep_device_is_enabled(epaddr->ep, PTL_DEVID_IPS)) ? 
+	(epaddr->ep->context.base_info.spi_piosize - 
 	 IPATH_MESSAGE_HDR_SIZE) : 2048;
     }
     

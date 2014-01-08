@@ -86,12 +86,15 @@ mq_alloc_pkts(struct ips_proto *proto, int npkts, int len, uint32_t flags))
 
 static
 int __recvpath
-ips_proto_mq_eager_complete(void *reqp)
+ips_proto_mq_eager_complete(void *reqp, uint32_t nbytes)
 {
     psm_mq_req_t req = (psm_mq_req_t)reqp;
     
-    req->state = MQ_STATE_COMPLETE;
-    mq_qq_append(&req->mq->completed_q, req);
+    req->send_msgoff += nbytes;
+    if (req->send_msgoff == req->send_msglen) {
+	req->state = MQ_STATE_COMPLETE;
+	mq_qq_append(&req->mq->completed_q, req);
+    }
     return IPS_RECVHDRQ_CONTINUE;
 }
 
@@ -137,7 +140,7 @@ extern psm_error_t ips_ptl_poll(ptl_t *ptl, int _ignored);
  */
 PSMI_ALWAYS_INLINE(
 psm_error_t
-ips_mq_send_envelope(ptl_t *ptl, struct ips_proto *proto, 
+ips_mq_send_envelope(struct ips_proto *proto, psm_epaddr_t mepaddr,
 		     ips_epaddr_t *ipsaddr, struct ips_scb *scb, int do_flush))
 {
     psm_error_t err = PSM_OK;
@@ -150,6 +153,10 @@ ips_mq_send_envelope(ptl_t *ptl, struct ips_proto *proto,
     	ips_scb_flags(scb) |= IPS_SEND_FLAG_WAIT_SDMA;
     }
     
+    flow->xmit_seq_num.msg = mepaddr->mctxt_send_seqnum&0xff;
+    flow->recv_seq_num.msg = (mepaddr->mctxt_send_seqnum>>8)&0xff;
+    mepaddr->mctxt_send_seqnum++;
+
     flow->fn.xfer.enqueue(flow, scb);
 
     if ((flow->transfer == PSM_TRANSFER_PIO) ||
@@ -157,7 +164,7 @@ ips_mq_send_envelope(ptl_t *ptl, struct ips_proto *proto,
       err = flow->fn.xfer.flush(flow, NULL);
    
     if (do_flush)
-	err = ips_recv_progress_if_busy(ptl, err);
+	err = ips_recv_progress_if_busy(ipsaddr->ptl, err);
 
     /* As per the PSM error model (or lack thereof), PSM clients expect to see
      * only PSM_OK as a recoverable error */
@@ -166,93 +173,148 @@ ips_mq_send_envelope(ptl_t *ptl, struct ips_proto *proto,
     return err;
 }
 
+/*
+ * We don't use message striping for middle message protocol,
+ * Tests on sandy-bridge two HCAs show lower bandwidth if
+ * message striping is used. 
+ */
 void __sendpath
-ips_mq_send_payload(ptl_t *ptl, ips_epaddr_t *ipsaddr, psmi_egrid_t egrid,
-		    void *ubuf, uint32_t len, psm_mq_req_t req,
-		    uint32_t flags)
+ips_mq_send_payload(psm_epaddr_t epaddr, psmi_egrid_t egrid,
+		    void *ubuf, uint32_t len, uint32_t offset,
+		    psm_mq_req_t req, uint32_t flags)
 {
     psm_error_t err = PSM_OK;
 
     ips_scb_t *scb;
     uintptr_t buf = (uintptr_t) ubuf;
-    uintptr_t pagesz = PSMI_PAGESIZE;
     uint32_t nbytes_left = len;
-    uint32_t pktlen;
-    struct ips_proto *proto = ipsaddr->proto;
+    uint32_t pktlen, frag_size;
+    ips_epaddr_t *ipsaddr;
+    struct ips_proto *proto;
     int is_blocking = !!(req == NULL);
     ptl_epaddr_flow_t flowid = 
       (flags & IPS_PROTO_FLAG_MQ_EAGER_SDMA) ?
       EP_FLOW_GO_BACK_N_DMA : EP_FLOW_GO_BACK_N_PIO;
-    struct ips_flow *flow = &ipsaddr->flows[flowid];
-    uint16_t frag_size = flow->frag_size;
+    struct ips_flow *flow;
 
     psmi_assert(len > 0);
-    
+    ipsaddr = epaddr->ptladdr;
+    proto = ipsaddr->proto;
+    flow = &ipsaddr->flows[flowid];
+    frag_size = flow->frag_size;
+
+    if (!(flags & IPS_PROTO_FLAG_MQ_EAGER_SDMA)) goto spio;
+
+    pktlen = len;
+    /* The payload size is limited by the pbc.length field which is 16 bits in
+     * DWORD, including both message header and payload. This translates to
+     * less than 256K payload. So 128K is used. */
+    if (pktlen > 131072) pktlen = 131072;
+
     do {
-	scb = mq_alloc_pkts(proto, MQ_NUM_MTUS(nbytes_left, frag_size),
-			    nbytes_left, 
-			    is_blocking ? IPS_SCB_FLAG_ADD_BUFFER : 0);
-	ips_scb_t *curscb = scb;
+	scb = mq_alloc_pkts(proto, 1, 0, 0);
+	psmi_assert(scb != NULL);
 
-	do {
-	    pktlen = min(frag_size, nbytes_left);
-	    /* If DMA, make sure we don't cross page boundaries */
-	    if (flow->transfer == PSM_TRANSFER_DMA && !is_blocking)
-	      pktlen = min(pktlen, pagesz - (buf & (pagesz-1)));
-	    ips_scb_length(curscb) = pktlen;
-	    ips_scb_mqhdr(curscb) = MQ_MSG_DATA;
-	    ips_scb_mqparam(curscb).u32w0 = egrid.egr_data;
-	    ips_scb_subopcode(curscb) = OPCODE_SEQ_MQ_CTRL;
-	    ips_scb_epaddr(curscb) = ipsaddr;
-	    nbytes_left -= pktlen;
+#if 0	//source code backdoor
+	/* turn on to use single frag-size packet */
+	pktlen = min(frag_size, nbytes_left);
+#else
+	pktlen = min(pktlen, nbytes_left);
+#endif
+	ips_scb_length(scb) = pktlen;
+	ips_scb_mqhdr(scb) = MQ_MSG_DATA_BLK;
+	ips_scb_mqparam(scb).u32w0 = egrid.egr_data;
+	ips_scb_mqparam(scb).u32w1 = offset;
+	ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_CTRL;
+	ips_scb_buffer(scb) = (void *) buf;
 
-	    _IPATH_VDBG("payload=%p, thislen=%d, frag_size=%d, nbytes_left=%d\n",
-		(void *) buf, pktlen, frag_size, nbytes_left);
+	buf += pktlen;
+	offset += pktlen;
+	nbytes_left -= pktlen;
 
-	    if (!is_blocking) /* non-blocking, send from user's buffer */
-		ips_scb_buffer(curscb) = (void *) buf;
-	    else /* blocking, copy to bounce buffer */
-		psmi_mq_mtucpy(ips_scb_buffer(curscb), (void *) buf, pktlen);
-
-	    /* Make sure we don't cross page boundaries with DMA. */
-	    if (flow->transfer == PSM_TRANSFER_DMA)
-		psmi_assert(
-		    PSMI_ALIGNDOWN(ips_scb_buffer(curscb), PSMI_PAGESIZE) ==
-		    PSMI_ALIGNDOWN(ips_scb_buffer(curscb)+pktlen-1, PSMI_PAGESIZE));
-
-	    if (nbytes_left == 0) { /* last packet */
-		if (!is_blocking) {
-		    /* non-blocking mode, need completion */
-		    ips_scb_cb(curscb) = ips_proto_mq_eager_complete;
-		    ips_scb_cb_param(curscb) = req;
-		}
-		ips_scb_flags(curscb) |= IPS_SEND_FLAG_ACK_REQ;
-	    }
-	    buf += pktlen;
-	    scb = curscb;
-	    curscb = SLIST_NEXT(curscb, next);
-
-	    flow->fn.xfer.enqueue(flow, scb);
-
-	    if (flags & IPS_PROTO_FLAG_MQ_EAGER_SDMA) 
-	      ips_scb_flags(scb) |= IPS_SEND_FLAG_WAIT_SDMA;
-
-	    /* if not sdma, or sdma but running out of scb,
-	     * we need to flush the pending queue */
-	    if (!(flags & IPS_PROTO_FLAG_MQ_EAGER_SDMA) ||
-	    !ips_scbctrl_avail(scb->scbc)) {
-	        (void)flow->fn.xfer.flush(flow, NULL);
-	        err = ips_recv_progress_if_busy(ipsaddr->ptl, err);
-	    }
-	} while (curscb != NULL);
-
-	if (flags & IPS_PROTO_FLAG_MQ_EAGER_SDMA) {
-	    err = flow->fn.xfer.flush(flow, NULL);
-	    if (err == PSM_EP_NO_RESOURCES || err == PSM_OK_NO_PROGRESS) 
-		err = ips_recv_progress_if_busy(ptl, PSM_EP_NO_RESOURCES);
+	if (nbytes_left == 0) {
+		ips_scb_cb(scb) = ips_proto_mq_eager_complete;
+		ips_scb_cb_param(scb) = req;
+		ips_scb_flags(scb) |= IPS_SEND_FLAG_ACK_REQ;
+	} else {
+		req->send_msgoff += pktlen;
 	}
-    }
-    while (nbytes_left);
+
+	scb->nfrag = (pktlen + frag_size - 1) / frag_size;
+	scb->frag_size = frag_size;
+
+	/* attach checksum if enabled, this matches what is done for tid-sdma */
+	if (proto->flags & IPS_PROTO_FLAG_CKSUM && !nbytes_left) {
+		uint32_t cksum = 0xffffffff;
+		cksum = ips_crc_calculate(len, (uint8_t *)(buf-len), cksum);
+		scb->ips_lrh.data[0].u32w0 = cksum;
+		scb->ips_lrh.data[0].u32w1 = offset - len;
+	}
+
+	flow->fn.xfer.enqueue(flow, scb);
+
+	ips_scb_flags(scb) |= IPS_SEND_FLAG_WAIT_SDMA;
+
+	if (nbytes_left == 0) {
+		err = flow->fn.xfer.flush(flow, NULL);
+		if (err == PSM_EP_NO_RESOURCES || err == PSM_OK_NO_PROGRESS) {
+		    err = ips_recv_progress_if_busy
+			(ipsaddr->ptl, PSM_EP_NO_RESOURCES);
+		}
+	}
+
+    } while (nbytes_left);
+
+    return;
+
+spio:
+    do {
+/*
+ * Each flow/proto uses its own scb. If a scb from one proto is
+ * used by another proto, there is a teardown problem, where
+ * a proto deallocates the scb still in use by another proto.
+ */
+	pktlen = min(frag_size, nbytes_left);
+	scb = mq_alloc_pkts(proto, 1, pktlen, is_blocking ? IPS_SCB_FLAG_ADD_BUFFER : 0);
+	psmi_assert(scb != NULL);
+
+	ips_scb_length(scb) = pktlen;
+	ips_scb_mqhdr(scb) = MQ_MSG_DATA;
+	ips_scb_mqparam(scb).u32w0 = egrid.egr_data;
+	ips_scb_mqparam(scb).u32w1 = offset;
+	ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_CTRL;
+
+	_IPATH_VDBG("payload=%p, thislen=%d, frag_size=%d, nbytes_left=%d\n",
+		(void *) buf, pktlen, frag_size, nbytes_left);
+	if (!is_blocking) /* non-blocking, send from user's buffer */
+	    ips_scb_buffer(scb) = (void *) buf;
+	else /* blocking, copy to bounce buffer */
+	    psmi_mq_mtucpy(ips_scb_buffer(scb), (void *) buf, pktlen);
+
+	buf += pktlen;
+	offset += pktlen;
+	nbytes_left -= pktlen;
+
+	if (nbytes_left == 0) { /* last packet */
+	    if (!is_blocking) {
+		/* non-blocking mode, need completion */
+		ips_scb_cb(scb) = ips_proto_mq_eager_complete;
+		ips_scb_cb_param(scb) = req;
+	    }
+	    ips_scb_flags(scb) |= IPS_SEND_FLAG_ACK_REQ;
+	} else {
+	    if (!is_blocking) {
+		req->send_msgoff += pktlen;
+	    }
+	}
+
+	flow->fn.xfer.enqueue(flow, scb);
+
+	/* we need to flush the pending queue */
+	err = flow->fn.xfer.flush(flow, NULL);
+	err = ips_recv_progress_if_busy(ipsaddr->ptl, err);
+
+    } while (nbytes_left);
 
     return;
 }
@@ -280,7 +342,7 @@ ips_shortcpy(void* vdest, const void* vsrc, uint32_t nchars)
 
 static __sendpath
 psm_error_t
-ips_ptl_mq_rndv(ptl_t *ptl, psm_mq_req_t req, ips_epaddr_t *ipsaddr, 
+ips_ptl_mq_rndv(psm_mq_req_t req, psm_epaddr_t mepaddr, ips_epaddr_t *ipsaddr, 
 		const void *buf, uint32_t len)
 {
     ips_scb_t *scb;
@@ -304,7 +366,6 @@ ips_ptl_mq_rndv(ptl_t *ptl, psm_mq_req_t req, ips_epaddr_t *ipsaddr,
     else
 	ips_scb_mqhdr(scb) = MQ_MSG_RTS_EGR;
 
-    ips_scb_epaddr(scb) = ipsaddr;
     ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_CTRL;
     ips_scb_flags(scb) |= IPS_SEND_FLAG_ACK_REQ;
     
@@ -312,13 +373,14 @@ ips_ptl_mq_rndv(ptl_t *ptl, psm_mq_req_t req, ips_epaddr_t *ipsaddr,
     ips_scb_uwords(scb)[1].u32w0 = psmi_mpool_get_obj_index(req);
     ips_scb_uwords(scb)[1].u32w1 = len;
 
-    if ((err = ips_mq_send_envelope(ptl, proto, ipsaddr, scb, PSMI_TRUE)))
+    memset(&req->tid_grant, 0, sizeof(req->tid_grant));
+    if ((err = ips_mq_send_envelope(proto, mepaddr, ipsaddr, scb, PSMI_TRUE)))
 	goto fail;
 	    
     /* Assume that we already put a few rndv requests in flight.  This helps
      * for bibw microbenchmarks and doesn't hurt the 'blocking' case since
      * we're going to poll anyway */
-    psmi_poll_internal(req->mq->ep, 1);
+    psmi_poll_internal(ipsaddr->epaddr->ep, 1);
 
 fail:
     _IPATH_VDBG("[rndv][%s->%s][b=%p][m=%d][t=%"PRIx64"][req=%p/%d]: %s\n", 
@@ -331,13 +393,14 @@ fail:
 }
 
 psm_error_t __sendpath
-ips_proto_mq_isend(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags, 
+ips_proto_mq_isend(psm_mq_t mq, psm_epaddr_t mepaddr, uint32_t flags, 
 	     uint64_t tag, const void *ubuf, uint32_t len, void *context,
 	     psm_mq_req_t *req_o)
 {
     uint8_t *buf = (uint8_t *) ubuf;
     uint32_t pktlen = 0;
     ips_scb_t *scb;
+    psm_epaddr_t epaddr = mepaddr->mctxt_current;
     ips_epaddr_t *ipsaddr = epaddr->ptladdr;
     struct ips_proto *proto = ipsaddr->proto;
     uint32_t pad_write_bytes;
@@ -346,19 +409,19 @@ ips_proto_mq_isend(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
     if_pf (req == NULL)
 	return PSM_NO_MEMORY;
 
+    mepaddr->mctxt_current = epaddr->mctxt_next;
     req->send_msglen = len;
     req->tag = tag;
     req->context = context;
 
     if (!flags && len <= MQ_IPATH_THRESH_TINY) {
 	scb = mq_alloc_tiny(proto);
-	ips_scb_epaddr(scb) = ipsaddr;
 	ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_HDR;
 	ips_scb_hdr_dlen(scb) = len;
 	ips_scb_mqhdr(scb) = MQ_MSG_TINY;
 	ips_scb_mqtag(scb) = tag;
 	mq_copy_tiny((uint32_t *)&ips_scb_mqparam(scb), (uint32_t *)buf, len);
-	err = ips_mq_send_envelope(ptl, proto, ipsaddr, scb, PSMI_TRUE);
+	err = ips_mq_send_envelope(proto, mepaddr, ipsaddr, scb, PSMI_TRUE);
 	/* We can mark this op complete since all the data is now copied
 	 * into an SCB that remains live until it is remotely acked */
 	req->state = MQ_STATE_COMPLETE;
@@ -373,7 +436,7 @@ ips_proto_mq_isend(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 	return err;
     }
     else if (flags & PSM_MQ_FLAG_SENDSYNC) {/* skip eager accounting below */
-	err = ips_ptl_mq_rndv(ptl, req, ipsaddr, ubuf, len);
+	err = ips_ptl_mq_rndv(req, mepaddr, ipsaddr, ubuf, len);
 	*req_o = req;
 	return err;
     }
@@ -389,14 +452,13 @@ ips_proto_mq_isend(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 	  pad_write_bytes = 0;
 	scb = mq_alloc_pkts(proto, 1, (len + pad_write_bytes),
 			    IPS_SCB_FLAG_ADD_BUFFER);
-	ips_scb_epaddr(scb) = ipsaddr;
 	ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_CTRL;
 	ips_scb_hdr_dlen(scb) = pad_write_bytes;
 	ips_scb_length(scb) = len + pad_write_bytes;
 	ips_scb_mqhdr(scb) = MQ_MSG_SHORT;
 	ips_scb_mqtag(scb) = tag;
 	ips_shortcpy (ips_scb_buffer(scb), buf, len);
-	err = ips_mq_send_envelope(ptl, proto, ipsaddr, scb, PSMI_TRUE);
+	err = ips_mq_send_envelope(proto, mepaddr, ipsaddr, scb, PSMI_TRUE);
 	req->state = MQ_STATE_COMPLETE;
 	mq_qq_append(&mq->completed_q, req);
         _IPATH_VDBG("[ishrt][%s->%s][b=%p][m=%d][t=%"PRIx64"][req=%p]\n", 
@@ -405,12 +467,11 @@ ips_proto_mq_isend(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
     }
     else if (len <= mq->ipath_thresh_rv) {
 	uint32_t proto_flags = proto->flags & IPS_PROTO_FLAG_MQ_MASK;
-	struct ips_flow *flow;
 	psmi_egrid_t egrid;
 
-	req->buf = (uint8_t *) buf;
-	req->buf_len = len;
 	scb = mq_alloc_pkts(proto, 1, 0, 0);
+	/* directly send from user's buffer */
+	ips_scb_buffer(scb) = buf;
 
 	if (len < proto->iovec_thresh_eager) {
 	    if (len <= 2 * ipsaddr->epr.epr_piosize) {
@@ -421,43 +482,44 @@ ips_proto_mq_isend(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 	        pktlen = min(len, ipsaddr->epr.epr_piosize);
 	    }
 	    proto_flags &= ~IPS_PROTO_FLAG_MQ_EAGER_SDMA;
+
+	    /*
+	     * since following packets are sent on the same flow,
+	     * we only wait for completion for the last packet
+	     */
+	    req->send_msgoff = pktlen;
 	}
 	else {
-	  psmi_assert(proto_flags & IPS_PROTO_FLAG_MQ_EAGER_SDMA);
-	  pktlen = PSMI_PAGESIZE - ((uintptr_t) buf & (PSMI_PAGESIZE-1));
-	  if (pktlen > ipsaddr->epr.epr_piosize)
-	    pktlen = 0;
+	    psmi_assert(proto_flags & IPS_PROTO_FLAG_MQ_EAGER_SDMA);
+	    /* send the unaligned bytes only, this is required by sdma. */
+	    pktlen = (uint32_t)((uintptr_t)buf & 0x3);
+	    if (pktlen) pktlen = 4 - pktlen;
+
+	    /* send from user buffer, need completion */
+	    req->send_msgoff = 0;
+	    if (pktlen) {
+		ips_scb_flags(scb) |= IPS_SEND_FLAG_ACK_REQ;
+		ips_scb_cb(scb) = ips_proto_mq_eager_complete;
+		ips_scb_cb_param(scb) = req;
+	    }
 	}
 	psmi_assert(pktlen <= ipsaddr->epr.epr_piosize);
 	
-	ips_scb_epaddr(scb) = ipsaddr;
-	ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_CTRL;
 	ips_scb_length(scb) = pktlen;
+	ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_CTRL;
 	ips_scb_mqhdr(scb) = MQ_MSG_LONG;
 	ips_scb_mqtag(scb) = tag;
-	ips_scb_mqparam(scb).u32w0 = len;
-
-	/* In non-blocking mode, directly send from user's buffer */
-	ips_scb_buffer(scb) = buf;
+	ips_scb_mqparam(scb).u32w1 = len;
 	
-	if (proto_flags & IPS_PROTO_FLAG_MQ_EAGER_SDMA)
-	    flow = &ipsaddr->flows[EP_FLOW_GO_BACK_N_DMA];
-	else {
-	    /* mask off eager dma cause if it's enabled, we're not using it
-	     * because of size cutoff */
-	    proto_flags &= ~IPS_PROTO_FLAG_MQ_EAGER_SDMA;
-	    flow = &ipsaddr->flows[EP_FLOW_GO_BACK_N_PIO];
-	}
-
        /* We need a new eager long message number */
-	egrid.egr_data = ips_scb_mqparam(scb).u32w1 = 
-		flow->xmit_egrlong.egr_data;
-	flow->xmit_egrlong.egr_msgno++;
+	egrid.egr_data = ips_scb_mqparam(scb).u32w0 = 
+		mepaddr->xmit_egrlong.egr_data;
+	mepaddr->xmit_egrlong.egr_msgno++;
 
 	/* Send the envelope but don't flush if writev is enabled */
-	err = ips_mq_send_envelope(ptl, proto, ipsaddr, scb, PSMI_FALSE);
-	ips_mq_send_payload(ptl, ipsaddr, egrid, 
-			    buf+pktlen, len-pktlen, req, 
+	err = ips_mq_send_envelope(proto, mepaddr, ipsaddr, scb, PSMI_FALSE);
+	ips_mq_send_payload(epaddr, egrid, 
+			    buf+pktlen, len-pktlen, pktlen, req, 
 			    proto_flags);
 
         _IPATH_VDBG("[ilong][%s->%s][b=%p][l=%d][m=%d][t=%"PRIx64"][req=%p]\n", 
@@ -465,7 +527,7 @@ ips_proto_mq_isend(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 	    psmi_epaddr_get_name(epaddr->epid), buf, pktlen, len, tag, req);
     }
     else { /* skip eager accounting below */
-	err = ips_ptl_mq_rndv(ptl, req, ipsaddr, ubuf, len);
+	err = ips_ptl_mq_rndv(req, mepaddr, ipsaddr, ubuf, len);
 	*req_o = req;
 	return err;
     }
@@ -480,27 +542,29 @@ ips_proto_mq_isend(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 
 __sendpath
 psm_error_t
-ips_proto_mq_send(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags, 
+ips_proto_mq_send(psm_mq_t mq, psm_epaddr_t mepaddr, uint32_t flags, 
 	    uint64_t tag, const void *ubuf, uint32_t len)
 {
     uint8_t *buf = (uint8_t *) ubuf;
     uint32_t pktlen;
     ips_scb_t *scb;
+    psm_epaddr_t epaddr = mepaddr->mctxt_current;
     ips_epaddr_t *ipsaddr = epaddr->ptladdr;
     uint32_t pad_write_bytes;
     psm_error_t err = PSM_OK;
     struct ips_proto *proto = ipsaddr->proto;
     
+    mepaddr->mctxt_current = epaddr->mctxt_next;
+
     if (flags == 0 && len <= MQ_IPATH_THRESH_TINY) {
 	scb = mq_alloc_tiny(proto);
-	ips_scb_epaddr(scb) = ipsaddr;
 	ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_HDR;
 	ips_scb_hdr_dlen(scb) = len;
 	ips_scb_mqhdr(scb) = MQ_MSG_TINY;
 	ips_scb_mqtag(scb) = tag;
 
 	mq_copy_tiny((uint32_t *)&ips_scb_mqparam(scb), (uint32_t *)buf, len);
-	err = ips_mq_send_envelope(ptl, proto, ipsaddr, scb, PSMI_TRUE);
+	err = ips_mq_send_envelope(proto, mepaddr, ipsaddr, scb, PSMI_TRUE);
 	_IPATH_VDBG("[tiny][%s->%s][b=%p][m=%d][t=%"PRIx64"]\n", 
 	    psmi_epaddr_get_name(mq->ep->epid), 
 	    psmi_epaddr_get_name(epaddr->epid), buf, len, tag);
@@ -525,7 +589,6 @@ ips_proto_mq_send(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 
 	scb = mq_alloc_pkts(proto, 1, (len + pad_write_bytes),
 			    IPS_SCB_FLAG_ADD_BUFFER);
-	ips_scb_epaddr(scb) = ipsaddr;
 	ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_CTRL;
 	ips_scb_hdr_dlen(scb) = pad_write_bytes;
 	ips_scb_length(scb) = len + pad_write_bytes;
@@ -533,7 +596,7 @@ ips_proto_mq_send(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 	ips_scb_mqtag(scb) = tag;
 		
 	ips_shortcpy (ips_scb_buffer(scb), buf, len);
-	err = ips_mq_send_envelope(ptl, proto, ipsaddr, scb, PSMI_TRUE);
+	err = ips_mq_send_envelope(proto, mepaddr, ipsaddr, scb, PSMI_TRUE);
         _IPATH_VDBG("[shrt][%s->%s][b=%p][m=%d][t=%"PRIx64"]\n", 
 	    psmi_epaddr_get_name(mq->ep->epid), 
 	    psmi_epaddr_get_name(epaddr->epid), buf, len, tag);
@@ -541,7 +604,7 @@ ips_proto_mq_send(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
     else if (len <= mq->ipath_thresh_rv) {
 	uint32_t proto_flags = proto->flags & IPS_PROTO_FLAG_MQ_MASK;
 	psmi_egrid_t egrid;
-	struct ips_flow *flow;
+	psm_mq_req_t req = NULL;
 
 	if (len < proto->iovec_thresh_eager_blocking) {
 	    if (len <= 2 * ipsaddr->epr.epr_piosize) {
@@ -552,45 +615,55 @@ ips_proto_mq_send(ptl_t *ptl, psm_mq_t mq, psm_epaddr_t epaddr, uint32_t flags,
 	        pktlen = min(len, ipsaddr->epr.epr_piosize);
 	    }
 	    proto_flags &= ~IPS_PROTO_FLAG_MQ_EAGER_SDMA;
+
+	    scb = mq_alloc_pkts(proto, 1, pktlen, IPS_SCB_FLAG_ADD_BUFFER);
+	    /* In blocking mode, copy to scb bounce buffer */
+	    ips_shortcpy (ips_scb_buffer(scb), buf, pktlen);
 	}
 	else {
 	    psmi_assert(proto_flags & IPS_PROTO_FLAG_MQ_EAGER_SDMA);
-	    pktlen = PSMI_PAGESIZE - ((uintptr_t) buf & (PSMI_PAGESIZE-1));
-	    if (pktlen > ipsaddr->epr.epr_piosize)
-	      pktlen = 0;
+	    /* send the unaligned bytes only, this is required by sdma. */
+	    pktlen = (uint32_t)((uintptr_t)buf & 0x3);
+	    if (pktlen) pktlen = 4 - pktlen;
+
+	    /* Block until we can get a req */
+	    PSMI_BLOCKUNTIL(mq->ep, err, 
+			(req = psmi_mq_req_alloc(mq, MQE_TYPE_SEND)));
+	    req->type |= MQE_TYPE_WAITING;
+            req->send_msglen = len;
+	    req->tag = tag;
+
+	    scb = mq_alloc_pkts(proto, 1, 0, 0);
+	    /* directly send from user's buffer */
+	    ips_scb_buffer(scb) = buf;
+
+	    /* send from user buffer, need completion */
+	    req->send_msgoff = 0;
+	    if (pktlen) {
+		ips_scb_flags(scb) |= IPS_SEND_FLAG_ACK_REQ;
+		ips_scb_cb(scb) = ips_proto_mq_eager_complete;
+		ips_scb_cb_param(scb) = req;
+	    }
 	}
 	psmi_assert(pktlen <= ipsaddr->epr.epr_piosize);
 	
-	scb = mq_alloc_pkts(proto, 1, pktlen, IPS_SCB_FLAG_ADD_BUFFER);
-		
-	ips_scb_epaddr(scb) = ipsaddr;
-	ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_CTRL;
 	ips_scb_length(scb) = pktlen;
+	ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_CTRL;
 	ips_scb_mqhdr(scb) = MQ_MSG_LONG;
 	ips_scb_mqtag(scb) = tag;
-	ips_scb_mqparam(scb).u32w0 = len;
-	
-	if (proto_flags & IPS_PROTO_FLAG_MQ_EAGER_SDMA) 
-	  flow = &ipsaddr->flows[EP_FLOW_GO_BACK_N_DMA];
-	else {
-	    /* mask off eager dma cause if it's enabled, we're not using it
-	     * because of size cutoff */
-	    proto_flags &= ~IPS_PROTO_FLAG_MQ_EAGER_SDMA;
-	    flow = &ipsaddr->flows[EP_FLOW_GO_BACK_N_PIO];
-	}
+	ips_scb_mqparam(scb).u32w1 = len;
 
-	/* In blocking mode, copy to scb bounce buffer */
-	ips_shortcpy (ips_scb_buffer(scb), buf, pktlen);
-	
 	/* We need a new eager long message number */
-	egrid.egr_data = ips_scb_mqparam(scb).u32w1 = 
-		flow->xmit_egrlong.egr_data;
-	flow->xmit_egrlong.egr_msgno++;
+	egrid.egr_data = ips_scb_mqparam(scb).u32w0 = 
+		mepaddr->xmit_egrlong.egr_data;
+	mepaddr->xmit_egrlong.egr_msgno++;
 
 	/* Send the envelope but don't flush if writev is enabled */
-	err = ips_mq_send_envelope(ptl, proto, ipsaddr, scb, PSMI_FALSE);
-	ips_mq_send_payload(ptl, ipsaddr, egrid, buf+pktlen, len-pktlen, NULL,
-			    proto_flags);
+	err = ips_mq_send_envelope(proto, mepaddr, ipsaddr, scb, PSMI_FALSE);
+	ips_mq_send_payload(epaddr, egrid,
+			buf+pktlen, len-pktlen, pktlen, req,
+			proto_flags);
+	if (req) psmi_mq_wait_internal(&req);
 
         _IPATH_VDBG("[long][%s->%s][b=%p][l=%d][m=%d][t=%"PRIx64"]\n", 
 	    psmi_epaddr_get_name(mq->ep->epid), 
@@ -604,7 +677,7 @@ do_rendezvous:
 			(req = psmi_mq_req_alloc(mq, MQE_TYPE_SEND)));
 	req->type |= MQE_TYPE_WAITING;
 	req->tag = tag;
-	err = ips_ptl_mq_rndv(ptl, req, ipsaddr, ubuf, len);
+	err = ips_ptl_mq_rndv(req, mepaddr, ipsaddr, ubuf, len);
 	if (err != PSM_OK)
 	    return err;
 	psmi_mq_wait_internal(&req);
@@ -626,10 +699,6 @@ ips_proto_mq_rts_match_callback(psm_mq_req_t req, int was_posted)
     ips_epaddr_t *ipsaddr = epaddr->ptladdr;
     struct ips_proto *proto = ipsaddr->proto;
 
-    req->recv_msgoff = 0;
-    req->recv_msgposted = 0;
-    req->next = NULL;
-
     /* We have a match.
      *
      * If we're doing eager-based r-v, just send back the sreq and length and
@@ -648,7 +717,7 @@ ips_proto_mq_rts_match_callback(psm_mq_req_t req, int was_posted)
     }
     else {
 	ips_protoexp_tid_get_from_token(
-	    proto->protoexp, req->buf, req->recv_msglen, ipsaddr, 
+	    proto->protoexp, req->buf, req->recv_msglen, epaddr, 
 	    req->rts_reqidx_peer, 
 	    req->type & MQE_TYPE_WAITING_PEER ? IPS_PROTOEXP_TIDGET_PEERWAIT : 0,
 	    ips_proto_mq_rv_complete_exp, req);
@@ -678,16 +747,15 @@ ips_proto_mq_push_eager_req(struct ips_proto *proto, psm_mq_req_t req)
     args[0].u32w0 = req->rts_reqidx_peer;
     args[0].u32w1 = psmi_mpool_get_obj_index(req);
     args[1].u32w0 = req->recv_msglen;
+    req->egrid.egr_data = args[0].u32w1;
 
     ipsaddr = req->rts_peer->ptladdr;
     flow = &ipsaddr->flows[EP_FLOW_GO_BACK_N_PIO];
-    ips_scb_epaddr(scb) = ipsaddr;
     ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_CTRL;
     ips_scb_mqhdr (scb) = MQ_MSG_CTS_EGR;
     
     if (req->recv_msglen == 0) {
-	ips_scb_cb(scb) = ips_proto_mq_rv_complete;
-	ips_scb_cb_param(scb) = req;
+	ips_proto_mq_rv_complete(req);
     }
 
     flow->fn.xfer.enqueue(flow, scb);
@@ -702,7 +770,7 @@ ips_proto_mq_push_eager_data(struct ips_proto *proto, psm_mq_req_t req)
     uintptr_t buf = (uintptr_t) req->buf;
     ips_epaddr_t *ipsaddr = req->rts_peer->ptladdr;
     uint32_t nbytes_this;
-    uint32_t nbytes_left = req->send_msglen - req->send_msgoff;
+    uint32_t nbytes_left = req->send_msglen - req->recv_msgoff;
     uint16_t frag_size = ipsaddr->epr.epr_piosize;
     struct ips_flow *flow = &ipsaddr->flows[EP_FLOW_GO_BACK_N_PIO];
     ips_scb_t *scb;
@@ -715,19 +783,15 @@ ips_proto_mq_push_eager_data(struct ips_proto *proto, psm_mq_req_t req)
 	    return PSM_OK_NO_PROGRESS;
 	
 	nbytes_this = min(nbytes_left, frag_size);
-	ips_scb_epaddr(scb) = ipsaddr;
 	ips_scb_length(scb) = nbytes_this;
 	ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_CTRL;
 	ips_scb_mqhdr (scb) = MQ_MSG_DATA_REQ;
-	ips_scb_buffer(scb) = (void *)(buf + req->send_msgoff);
-	ips_scb_uwords(scb)[0].u32w0 = req->rts_reqidx_peer;
-	ips_scb_uwords(scb)[0].u32w1 = req->send_msgoff;
+	ips_scb_buffer(scb) = (void *)(buf + req->recv_msgoff);
+	ips_scb_mqparam(scb).u32w0 = req->rts_reqidx_peer;
+	ips_scb_mqparam(scb).u32w1 = req->recv_msgoff;
 
-	if (nbytes_left == nbytes_this) {
-	    ips_scb_cb(scb) = ips_proto_mq_rv_complete;
-	    ips_scb_cb_param(scb) = req;
-	    ips_scb_flags(scb) |= IPS_SEND_FLAG_ACK_REQ;
-	}
+	ips_scb_cb(scb) = ips_proto_mq_eager_complete;
+	ips_scb_cb_param(scb) = req;
 #if 0
 	_IPATH_INFO("send req %p, off %d/%d, len %d, last=%s\n",
 		req, req->send_msgoff, req->send_msglen, nbytes_this,
@@ -739,7 +803,7 @@ ips_proto_mq_push_eager_data(struct ips_proto *proto, psm_mq_req_t req)
 	(void)flow->fn.xfer.flush(flow, NULL);
 
 	nbytes_left      -= nbytes_this;
-	req->send_msgoff += nbytes_this;
+	req->recv_msgoff += nbytes_this;
     }
 
     return PSM_OK;
@@ -784,14 +848,14 @@ ips_proto_mq_handle_cts(struct ips_proto *proto, ptl_arg_t *args)
 }
 
 int __recvpath
-ips_proto_mq_handle_rts_envelope(psm_mq_t mq, int mode, ips_epaddr_t *ipsaddr, 
-				 uint64_t tag, uint32_t reqidx_peer, 
-				 uint32_t msglen)
+ips_proto_mq_handle_rts_envelope(psm_mq_t mq, int mode, psm_epaddr_t epaddr, 
+				uint64_t tag, uint32_t reqidx_peer, 
+				uint32_t msglen)
 {
     psm_mq_req_t req;
     _IPATH_VDBG("tag=%llx reqidx_peer=%d, msglen=%d\n", 
 		    (long long) tag, reqidx_peer, msglen);
-    int rc = psmi_mq_handle_rts(mq, tag, 0, msglen, ipsaddr->epaddr,
+    int rc = psmi_mq_handle_rts(mq, tag, 0, msglen, epaddr,
 		                ips_proto_mq_rts_match_callback, &req);
     req->rts_reqidx_peer = reqidx_peer;
     if (mode == MQ_MSG_RTS_WAIT)
@@ -801,6 +865,26 @@ ips_proto_mq_handle_rts_envelope(psm_mq_t mq, int mode, ips_epaddr_t *ipsaddr,
 	ips_proto_mq_rts_match_callback(req, 1);
 	/* XXX if blocking, break out of progress loop */
     }
+
+    /* If no match, will be called when send actually matches */
+    return IPS_RECVHDRQ_CONTINUE;
+}
+
+int __recvpath
+ips_proto_mq_handle_rts_envelope_outoforder(psm_mq_t mq, int mode,
+				psm_epaddr_t peer, uint16_t msg_seqnum,
+				uint64_t tag, uint32_t reqidx_peer, 
+				uint32_t msglen)
+{
+    psm_mq_req_t req;
+    _IPATH_VDBG("tag=%llx reqidx_peer=%d, msglen=%d\n", 
+		    (long long) tag, reqidx_peer, msglen);
+    psmi_mq_handle_rts_outoforder(mq, tag, 0, msglen,
+				peer, msg_seqnum,
+		                ips_proto_mq_rts_match_callback, &req);
+    req->rts_reqidx_peer = reqidx_peer;
+    if (mode == MQ_MSG_RTS_WAIT)
+	req->type |= MQE_TYPE_WAITING_PEER;
 
     /* If no match, will be called when send actually matches */
     return IPS_RECVHDRQ_CONTINUE;

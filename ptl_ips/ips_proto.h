@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -244,6 +245,15 @@ struct ips_proto_error_stats {
   uint64_t      num_ib_err;
 };
 
+// OPP support structure.
+struct opp_api {
+  void* (*op_path_find_hca)(const char*name, void **device);
+  void* (*op_path_open)(void *device, int port_num);
+  void (*op_path_close)(void *context);
+  int (*op_path_get_path_by_rec)(void *context, ibta_path_rec_t *query, ibta_path_rec_t *response);
+  /* TODO: Need symbol to ibv_close_device. */
+};
+
 struct ips_ibta_compliance_fn {
   psm_error_t (*get_path_rec)(struct ips_proto *proto, uint16_t slid, 
 			      uint16_t dlid, uint16_t desthca_type,
@@ -251,6 +261,14 @@ struct ips_ibta_compliance_fn {
 			      ips_epaddr_t *ipsaddr);
   psm_error_t (*fini)(struct ips_proto *proto);
 };
+
+typedef enum ptl_epaddr_flow {
+  EP_FLOW_GO_BACK_N_PIO,
+  EP_FLOW_GO_BACK_N_DMA,
+  EP_FLOW_GO_BACK_N_AM_REQ,
+  EP_FLOW_GO_BACK_N_AM_RSP,
+  EP_FLOW_LAST         /* Keep this the last endpoint flow */
+} ptl_epaddr_flow_t;
 
 struct ips_proto {
     struct ptl	      *ptl;	/* cached */
@@ -285,7 +303,7 @@ struct ips_proto {
   
     struct ips_proto_am	proto_am;
 
-    struct ips_ctrlq	ctrlq[4];
+    struct ips_ctrlq	ctrlq[EP_FLOW_LAST];
 
     /* Handling tid errors */
     uint32_t	tiderr_cnt;
@@ -302,6 +320,20 @@ struct ips_proto {
     int		    num_connected_to; 
     int		    num_connected_from;
     int		    num_disconnect_requests;
+
+    /* misc state variables. */
+// Smallest interval in cycles between which we warn about stray messages
+// This is a per-endpoint quantity, overridable with PSM_STRAY_WARN_INTERVAL
+// We use the same interval to send the "die" message.
+    uint64_t	    stray_warn_interval;
+    int		    done_warning;
+    int		    done_once;
+    int		    num_bogus_warnings;
+    struct {
+	uint32_t    interval_secs;
+	uint64_t    next_warning;
+	uint64_t    count;
+    } psmi_logevent_tid_send_reqs;
 
     /* SL2VL table for protocol */
     int         sl2vl[16];
@@ -320,6 +352,30 @@ struct ips_proto {
 	uint8_t   ccti_threshold; /* threshod to make log */
 	uint8_t   ccti_min; /* min value for ccti */
     } cace[16]; /* 16 service level */
+
+    /* Path record support */
+    uint8_t ips_ipd_delay[IBTA_RATE_120_GBPS + 1];
+    struct hsearch_data ips_path_rec_hash;
+    void *opp_lib;
+    void *hndl;
+    void *device;
+    void *opp_ctxt;
+    struct opp_api opp_fn;
+
+/*
+ * Control message queue for pending messages.
+ *
+ * Control messages are queued as pending when no PIO is available for sending
+ * the message.  They are composed on the fly and do not need buffering. 
+ *
+ * Variables here are write once (at init) and read afterwards (except the msg
+ * queue overflow counters).
+ */
+    uint32_t ctrl_msg_queue_overflow;
+    uint32_t ctrl_msg_queue_never_enqueue;
+    uint32_t message_type_to_index[256];
+#define message_type2index(proto, msg_type) (proto->message_type_to_index[(msg_type)] & ~CTRL_MSG_QUEUE_ALWAYS)
+
 };
 
 /* 
@@ -345,10 +401,10 @@ struct ptl_epaddr_stats {
  */
 
 /* 
- * Flow index (8 bits) encodes the following:
+ * Flow index (6 bits) encodes the following:
  *
- * Protocol: 4 bits
- * Flow Index:   4 bits
+ * Protocol: 3 bits
+ * Flow Index:   3 bits
  *
  * Currently only two protocols supported: Go Back N (the "original" flow)
  * and the TIDFLOW. We may look at adding other protocols like 
@@ -358,15 +414,21 @@ struct ptl_epaddr_stats {
  * refers to the index of the flow between two endpoints. For TIDFLOWS
  * this is not currently used.
  */
+
+#define IPS_MAX_PROTOCOL	8
+#define IPS_MAX_FLOWINDEX	8
  
 #define IPS_FLOWID_PACK(protocol,flowindex)   \
-  ( ((((uint8_t)protocol)&0xf) << 4) |	      \
-    (((uint8_t)flowindex)&0xf) )
+  ( ((((uint16_t)protocol)&0x7) << 3) |	      \
+    (((uint16_t)flowindex)&0x7) )
 
 #define IPS_FLOWID_UNPACK(flow,protocol,flowindex) do {	\
-    (protocol) = ((flow)>>4)&0xf;                       \
-    (flowindex) = ((flow)&0xf);				\
+    (protocol) = ((flow)>>3)&0x7;                       \
+    (flowindex) = ((flow)&0x7);				\
   } while (0)
+
+#define IPS_FLOWID2INDEX(flow)	\
+   ((flow)&0x7)
 
 typedef void (*ips_flow_enqueue_fn_t)(struct ips_flow *flow, ips_scb_t *scb);
 typedef psm_error_t (*ips_flow_flush_fn_t)(struct ips_flow *, int *nflushed);
@@ -436,6 +498,8 @@ struct ips_flow {
     uint16_t credits;           /* Current credits available to send on flow */
     uint16_t cwin;              /* Size of congestion window */
     uint16_t ack_interval;
+    uint16_t msg_ooo_toggle;	/* toggle for OOO message */
+    uint16_t msg_ooo_seqnum;	/* seqnum for OOO message */
 
     psmi_seqnum_t xmit_seq_num;
     psmi_seqnum_t xmit_ack_num;
@@ -445,22 +509,12 @@ struct ips_flow {
     uint32_t scb_num_pending;
     uint32_t scb_num_unacked;
 
-    psmi_egrid_t  xmit_egrlong; /* msg seq no */
-
     psmi_timer timer_send;   /* timer for frames that got a busy PIO */
     psmi_timer timer_ack;    /* timer for unacked frames */
 
     STAILQ_HEAD(ips_scb_unackedq, ips_scb)  scb_unacked;
     SLIST_HEAD(ips_scb_pendlist, ips_scb)   scb_pend;
 };
-
-typedef enum ptl_epaddr_flow {
-  EP_FLOW_GO_BACK_N_PIO,
-  EP_FLOW_GO_BACK_N_DMA,
-  EP_FLOW_GO_BACK_N_AM_REQ,
-  EP_FLOW_GO_BACK_N_AM_RSP,
-  EP_FLOW_LAST         /* Keep this the last endpoint flow */
-} ptl_epaddr_flow_t;
 
 struct ptl_epaddr {
     struct ptl	      *ptl;	/* cached */
@@ -471,6 +525,7 @@ struct ptl_epaddr {
     uint16_t			flags;	/* per-endpoint flags */
     struct ips_epinfo_remote	epr;	/* remote endpoint params */
     struct ips_flow		flows[EP_FLOW_LAST]	    PSMI_CACHEALIGN;
+    struct ips_flow		tidgr_flow; /* tidflow */
 
     uint32_t ctrl_msg_queued; /* bitmap of queued control messages to be send */
     uint32_t delay_in_ms;   /* used in close */
@@ -584,8 +639,9 @@ void ips_protoexp_handle_data_err(const struct ips_recvhdrq_event *rcv_ev);
 void ips_protoexp_handle_tf_seqerr(const struct ips_recvhdrq_event *rcv_ev);
 void ips_protoexp_handle_tf_generr(const struct ips_recvhdrq_event *rcv_ev);
 
-void ips_protoexp_recv_unaligned_data(const struct ips_recvhdrq_event *rcv_ev);
+void ips_protoexp_recv_unaligned_data(struct ips_recvhdrq_event *rcv_ev);
 void ips_protoexp_data(struct ips_recvhdrq_event *rcv_ev);
+
 void ips_protoexp_tid_grant(const struct ips_recvhdrq_event *rcv_ev);
 void ips_protoexp_tid_grant_ack(const struct ips_recvhdrq_event *rcv_ev);
 int  ips_protoexp_tid_release(const struct ips_recvhdrq_event *rcv_ev);
@@ -605,7 +661,7 @@ psm_error_t ips_protoexp_flow_newgen(struct ips_tid_recv_desc *tidrecvc);
 #define IPS_PROTOEXP_TIDGET_PEERWAIT	0x2
 psm_error_t ips_protoexp_tid_get_from_token(struct ips_protoexp *protoexp,
 				 void *buf, uint32_t length, 
-				 struct ptl_epaddr *ipsaddr,
+				 psm_epaddr_t epaddr,
 				 uint32_t remote_tok, uint32_t flags,
 				 ips_tid_completion_callback_t callback,
 				 void *context);
@@ -620,19 +676,23 @@ psm_error_t ips_proto_mq_push_eager_data(struct ips_proto *proto,
 
 int ips_proto_mq_handle_cts(struct ips_proto *proto, ptl_arg_t *args);
 
-int ips_proto_mq_handle_rts_envelope(psm_mq_t mq, int mode, struct ptl_epaddr *ipsaddr, 
-				     uint64_t tag, uint32_t reqidx_peer, 
-				     uint32_t msglen);
+int ips_proto_mq_handle_rts_envelope(psm_mq_t mq, int mode, psm_epaddr_t epaddr, 
+			     uint64_t tag, uint32_t reqidx_peer, 
+			     uint32_t msglen);
+int ips_proto_mq_handle_rts_envelope_outoforder(psm_mq_t mq, int mode,
+			     psm_epaddr_t epaddr, uint16_t msg_seqnum,
+			     uint64_t tag, uint32_t reqidx_peer, 
+			     uint32_t msglen);
 
-psm_error_t ips_proto_mq_send(struct ptl *ptl, psm_mq_t mq, psm_epaddr_t epaddr, 
+psm_error_t ips_proto_mq_send(psm_mq_t mq, psm_epaddr_t epaddr, 
 			      uint32_t flags, uint64_t tag, const void *ubuf, 
 			      uint32_t len);
 
-psm_error_t ips_proto_mq_isend(struct ptl *ptl, psm_mq_t mq, psm_epaddr_t epaddr, 
+psm_error_t ips_proto_mq_isend(psm_mq_t mq, psm_epaddr_t epaddr, 
 			       uint32_t flags, uint64_t tag, const void *ubuf, 
 			       uint32_t len, void *context, psm_mq_req_t *req_o);
 
-int ips_proto_am(const struct ips_recvhdrq_event *rcv_ev);
+int ips_proto_am(struct ips_recvhdrq_event *rcv_ev);
 
 /* IBTA feature related functions (path record, sl2vl etc.) */
 psm_error_t ips_ibta_init_sl2vl_table(struct ips_proto *proto);

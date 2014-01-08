@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -62,7 +63,7 @@ mpspawn_stats_flags;
 #define MPSPAWN_NAN_U64 ((uint64_t) ~0ULL)
 #define MPSPAWN_ISNAN_U64(x)    (((uint64_t)(x)) == MPSPAWN_NAN_U64)
 
-#define MPSPAWN_NAN	    ((uint64_t) NAN)
+#define MPSPAWN_NAN	    ((uint64_t) ~0ULL)  //NAN)
 #define MPSPAWN_ISNAN(x)    (isnan(x))
 
 struct mpspawn_stats_add_args;	/* client->mpspawn stats registration */

@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -89,8 +90,6 @@ typedef struct psmi_handlertab {
 #define PSMI_KASSIST_MODE_DEFAULT PSMI_KASSIST_KNEM_PUT
 #define PSMI_KASSIST_MODE_DEFAULT_STRING  "knem-put"
 
-int psmi_kassist_mode;
-int psmi_kassist_fd;
 int psmi_epaddr_kcopy_pid(psm_epaddr_t epaddr);
 
 /*
@@ -134,7 +133,7 @@ void psmi_am_handler(void *toki, psm_amarg_t *args, int narg, void *buf, size_t 
 
 /* AM over shared memory (forward decls) */
 psm_error_t
-psmi_amsh_am_short_request(ptl_t *ptl, psm_epaddr_t epaddr,
+psmi_amsh_am_short_request(psm_epaddr_t epaddr,
 			   psm_handler_t handler, psm_amarg_t *args, int nargs,
 			   void *src, size_t len, int flags,
 			   psm_am_completion_fn_t completion_fn,
@@ -190,11 +189,260 @@ struct am_reqq_fifo_t {
     am_reqq_t  *first;
     am_reqq_t  **lastp;
 };
-struct am_reqq_fifo_t psmi_am_reqq_fifo;
 
-psm_error_t psmi_am_reqq_drain();
+psm_error_t psmi_am_reqq_drain(ptl_t *ptl);
 void psmi_am_reqq_add(int amtype, ptl_t *ptl, psm_epaddr_t epaddr,
                  psm_handler_t handler, psm_amarg_t *args, int nargs,
 		 void *src, size_t len, void *dest, int flags);
+
+/*
+ * Shared memory Active Messages, implementation derived from
+ * Lumetta, Mainwaring, Culler.  Multi-Protocol Active Messages on a Cluster of
+ * SMP's. Supercomputing 1997.
+ *
+ * We support multiple endpoints in shared memory, but we only support one
+ * shared memory context with up to AMSH_MAX_LOCAL_PROCS local endpoints. Some
+ * structures are endpoint specific (as denoted * with amsh_ep_) and others are
+ * specific to the single shared memory context * (amsh_ global variables). 
+ *
+ * Each endpoint maintains a shared request block and a shared reply block.
+ * Each block is composed of queues for small, medium and large messages.
+ */
+
+#define QFREE      0
+#define QUSED      1
+#define QREADY     2
+#define QREADYMED  3
+#define QREADYLONG 4
+
+#define QISEMPTY(flag) (flag<QREADY)
+#ifdef __powerpc__
+#  define _QMARK_FLAG_FENCE()  asm volatile("lwsync" : : : "memory")
+#elif defined(__x86_64__) || defined(__i386__)
+#  define _QMARK_FLAG_FENCE()  asm volatile("" : : : "memory")  /* compilerfence */
+#else
+#  error No _QMARK_FLAG_FENCE() defined for this platform
+#endif
+
+#define _QMARK_FLAG(pkt_ptr, _flag)      do {    \
+        _QMARK_FLAG_FENCE();                     \
+        (pkt_ptr)->flag = (_flag);               \
+        } while (0)
+
+#define QMARKFREE(pkt_ptr)  _QMARK_FLAG(pkt_ptr, QFREE)
+#define QMARKREADY(pkt_ptr) _QMARK_FLAG(pkt_ptr, QREADY)
+#define QMARKUSED(pkt_ptr)  _QMARK_FLAG(pkt_ptr, QUSED)
+
+#define AMFMT_SYSTEM       1
+#define AMFMT_SHORT_INLINE 2
+#define AMFMT_SHORT        3
+#define AMFMT_LONG         4
+#define AMFMT_LONG_END     5
+#define AMFMT_HUGE         6
+#define AMFMT_HUGE_END     7
+
+#define _shmidx _ptladdr_u32[0]
+#define _cstate _ptladdr_u32[1]
+
+#define AMSH_CMASK_NONE    0
+#define AMSH_CMASK_PREREQ  1
+#define AMSH_CMASK_POSTREQ 2
+#define AMSH_CMASK_DONE    3
+
+#define AMSH_CSTATE_TO_MASK         0x0f
+#define AMSH_CSTATE_TO_NONE         0x01
+#define AMSH_CSTATE_TO_REPLIED      0x02
+#define AMSH_CSTATE_TO_ESTABLISHED  0x03
+#define AMSH_CSTATE_TO_DISC_REPLIED 0x04
+#define AMSH_CSTATE_TO_GET(epaddr)  ((epaddr)->_cstate & AMSH_CSTATE_TO_MASK)
+#define AMSH_CSTATE_TO_SET(epaddr,state)                                      \
+            (epaddr)->_cstate = (((epaddr)->_cstate & ~AMSH_CSTATE_TO_MASK) | \
+                            ((AMSH_CSTATE_TO_ ## state) & AMSH_CSTATE_TO_MASK))
+
+#define AMSH_CSTATE_FROM_MASK         0xf0
+#define AMSH_CSTATE_FROM_NONE         0x10
+#define AMSH_CSTATE_FROM_DISC_REQ     0x40
+#define AMSH_CSTATE_FROM_ESTABLISHED  0x50
+#define AMSH_CSTATE_FROM_GET(epaddr)  ((epaddr)->_cstate & AMSH_CSTATE_FROM_MASK)
+#define AMSH_CSTATE_FROM_SET(epaddr,state)                                      \
+            (epaddr)->_cstate = (((epaddr)->_cstate & ~AMSH_CSTATE_FROM_MASK) | \
+                           ((AMSH_CSTATE_FROM_ ## state) & AMSH_CSTATE_FROM_MASK))
+
+/**********************************
+ * Shared memory packet formats 
+ **********************************/
+typedef 
+struct am_pkt_short {
+    uint32_t        flag;     /**> Packet state */
+    union {
+        uint32_t        bulkidx;  /**> index in bulk packet queue */
+        uint32_t        length;   /**> length when no bulkidx used */
+    };
+    uint16_t        shmidx;   /**> index in shared segment */
+    uint16_t        type;
+    uint16_t        nargs;
+    uint16_t        handleridx;
+
+    psm_amarg_t	    args[NSHORT_ARGS];	/* AM arguments */
+
+    /* We eventually will expose up to 8 arguments, but this isn't implemented
+     * For now.  >6 args will probably require a medium instead of a short */
+}
+am_pkt_short_t;
+PSMI_STRICT_SIZE_DECL(am_pkt_short_t,64);
+
+typedef struct am_pkt_bulk {
+    uint32_t    flag;
+    uint32_t    idx;
+    uintptr_t   dest;       /* Destination pointer in "longs" */
+    uint32_t    dest_off;   /* Destination pointer offset */
+    uint32_t    len;   /* Destination length within offset */
+    psm_amarg_t	args[2];    /* Additional "spillover" for >6 args */
+    uint8_t	payload[0];
+}
+am_pkt_bulk_t;
+/* No strict size decl, used for mediums and longs */
+
+/****************************************************
+ * Shared memory header and block control structures
+ ***************************************************/
+
+/* Each pkt queue has the same header format, although the queue
+ * consumers don't use the 'head' index in the same manner. */
+typedef struct am_ctl_qhdr {
+    uint32_t    head;		/* Touched only by 1 consumer */
+    uint8_t	_pad0[64-4];
+
+    pthread_spinlock_t  lock;
+    uint32_t    tail;		/* XXX candidate for fetch-and-incr */
+    uint32_t    elem_cnt;
+    uint32_t    elem_sz;
+    uint8_t     _pad1[64-3*4-sizeof(pthread_spinlock_t)];
+}
+am_ctl_qhdr_t;
+PSMI_STRICT_SIZE_DECL(am_ctl_qhdr_t,128);
+
+/* Each block reserves some space at the beginning to store auxiliary data */
+#define AMSH_BLOCK_HEADER_SIZE  4096
+
+/* Each process has a reply qhdr and a request qhdr */
+typedef struct am_ctl_blockhdr {
+    volatile am_ctl_qhdr_t    shortq;
+    volatile am_ctl_qhdr_t    medbulkq;
+    volatile am_ctl_qhdr_t    longbulkq;
+    volatile am_ctl_qhdr_t    hugebulkq;
+}
+am_ctl_blockhdr_t;
+PSMI_STRICT_SIZE_DECL(am_ctl_blockhdr_t,128*3);
+
+/* We cache the "shorts" because that's what we poll on in the critical path.
+ * We take care to always update these pointers whenever the segment is remapped.
+ */ 
+typedef struct am_ctl_qshort_cache {
+    volatile am_pkt_short_t  *base;  
+    volatile am_pkt_short_t  *head;
+    volatile am_pkt_short_t  *end;
+}
+am_ctl_qshort_cache_t;
+
+/******************************************
+ * Shared segment local directory (global)
+ ******************************************
+ *
+ * Each process keeps a directory for where request and reply structures are 
+ * located at its peers.  This directory must be re-initialized every time the 
+ * shared segment moves in the VM, and the segment moves every time we remap()
+ * for additional memory.
+ */
+struct amsh_qdirectory {
+    am_ctl_blockhdr_t	*qreqH;
+    am_pkt_short_t	*qreqFifoShort;
+    am_pkt_bulk_t  	*qreqFifoMed;
+    am_pkt_bulk_t  	*qreqFifoLong;
+    am_pkt_bulk_t  	*qreqFifoHuge;
+
+    am_ctl_blockhdr_t	*qrepH;
+    am_pkt_short_t	*qrepFifoShort;
+    am_pkt_bulk_t  	*qrepFifoMed;
+    am_pkt_bulk_t  	*qrepFifoLong;
+    am_pkt_bulk_t  	*qrepFifoHuge;
+
+    int			kassist_pid;
+} __attribute__ ((aligned(8)));
+
+/* The first shared memory page is a control page to support each endpoint
+ * independently adding themselves to the shared memory segment. */
+struct am_ctl_dirpage {
+    pthread_mutex_t lock;
+    char            _pad0[64-sizeof(pthread_mutex_t)];
+    volatile int    is_init;
+    char            _pad1[64-sizeof(int)];
+
+    uint16_t        psm_verno[PTL_AMSH_MAX_LOCAL_PROCS];
+    uint32_t        amsh_features[PTL_AMSH_MAX_LOCAL_PROCS];
+    int             num_attached; /* 0..MAX_LOCAL_PROCS-1 */
+    int		    max_idx;
+
+    psm_epid_t      shmidx_map_epid[PTL_AMSH_MAX_LOCAL_PROCS];
+    int		    kcopy_minor;
+    int		    kassist_pids[PTL_AMSH_MAX_LOCAL_PROCS];
+};
+
+#define AMSH_HAVE_KCOPY	0x01
+#define AMSH_HAVE_KNEM  0x02
+#define AMSH_HAVE_KASSIST 0x3
+
+/******************************************
+ * Shared fifo element counts and sizes
+ ******************************************
+ * These values are context-wide, they can only be set early on and can't be *
+ * modified at runtime.  All endpoints are expected to use the same values.
+ */
+typedef
+struct amsh_qinfo {
+    int qreqFifoShort;
+    int qreqFifoMed;
+    int qreqFifoLong;
+    int qreqFifoHuge;
+
+    int qrepFifoShort;
+    int qrepFifoMed;
+    int qrepFifoLong;
+    int qrepFifoHuge;
+}
+amsh_qinfo_t;
+
+/******************************************
+ * Per-endpoint structures (ep-local)
+ ******************************************
+ * Each endpoint keeps its own information as to where it resides in the
+ * directory, and maintains its own cached copies of where the short header
+ * resides in shared memory.
+ *
+ * NOTE: All changes must be reflected in PSMI_AMSH_EP_SIZE
+ */
+struct ptl {
+    psm_ep_t		   ep;
+    psm_epid_t             epid;
+    psm_epaddr_t	   epaddr;
+    ptl_ctl_t              *ctl;
+    int                    shmidx; 
+    am_ctl_qshort_cache_t  reqH;
+    am_ctl_qshort_cache_t  repH;
+    psm_epaddr_t	   shmidx_map_epaddr[PTL_AMSH_MAX_LOCAL_PROCS];
+    int                    zero_polls;
+    int                    amsh_only_polls;
+
+    pthread_mutex_t        connect_lock;
+    int                    connect_phase;
+    int                    connect_to;
+    int                    connect_from;
+
+/* List of context-specific shared variables */
+    amsh_qinfo_t	   amsh_qsizes;
+    am_pkt_short_t	   amsh_empty_shortpkt;
+    struct am_reqq_fifo_t  psmi_am_reqq_fifo;
+
+};
 
 #endif

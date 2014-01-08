@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -132,7 +133,7 @@ struct ips_tid_send_desc {
     /* Filled in at allocation time */
     ptl_arg_t	  descid;
     uint32_t	  length;
-    ips_epaddr_t *epaddr;
+    ips_epaddr_t *ipsaddr;
     psm_mq_req_t  mqreq;
     struct ips_flow tidflow;
     
@@ -141,6 +142,7 @@ struct ips_tid_send_desc {
 				    
     /* Iterated during send progress */
     void	*buffer;
+    void	*bounce_buf;
     int		tid_idx; 
     int		is_complete;
     uint32_t	remaining_bytes;   
@@ -173,7 +175,9 @@ struct ips_expected_recv_stats {
 };
 
 struct ips_tid_recv_desc {
-    struct ips_protoexp		    *protoexp;
+    const psmi_context_t *context;
+    struct ips_protoexp	 *protoexp;
+    ips_epaddr_t	 *ipsaddr;
     STAILQ_ENTRY(ips_tid_recv_desc) next;
 				    
     /* desc id held in tid_list below */
@@ -219,13 +223,12 @@ struct ips_tid_recv_desc {
  */
 struct ips_tid_get_request {
     STAILQ_ENTRY(ips_tid_get_request)	tidgr_next;
-    struct ips_protoexp			*tidgr_protoexp;
-    struct ips_flow                      flow;
+    struct ips_protoexp		*tidgr_protoexp;
+    psm_epaddr_t		 tidgr_epaddr;
 					
     void			 *tidgr_lbuf;
     uint32_t			  tidgr_length;
     uint32_t			  tidgr_rndv_winsz;
-    ips_epaddr_t		 *tidgr_epaddr;
     uint32_t			  tidgr_sendtoken;
     ips_tid_completion_callback_t tidgr_callback;
     void			 *tidgr_ucontext;

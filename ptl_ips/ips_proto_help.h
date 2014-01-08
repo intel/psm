@@ -51,7 +51,7 @@ ips_flow_gen_ackflags(ips_scb_t *scb, struct ips_flow *flow))
 {
   uint32_t diff = (flow->protocol == PSM_PROTOCOL_TIDFLOW) ? 
     (flow->xmit_seq_num.seq - flow->xmit_ack_num.seq) :
-    (flow->xmit_seq_num.psn - flow->xmit_ack_num.psn);
+    (flow->xmit_seq_num.pkt - flow->xmit_ack_num.pkt);
     
     /*
      * This is currently disabled pending more experimentation.  The goal
@@ -110,14 +110,14 @@ int ips_do_cksum(struct ips_proto *proto,
 {
 
   if_pf ((proto->flags & IPS_PROTO_FLAG_CKSUM) && 
-      (((__le32_to_cpu(p_hdr->iph.ver_context_tid_offset) >> INFINIPATH_I_TID_SHIFT) & INFINIPATH_I_TID_MASK) == IPATH_EAGER_TID_ID)) {
+      (((__le32_to_cpu(p_hdr->iph.ver_context_tid_offset) >> INFINIPATH_I_TID_SHIFT) & INFINIPATH_I_TID_MASK) == IPATH_EAGER_TID_ID) && (p_hdr->mqhdr != MQ_MSG_DATA_BLK)) {
     
     uint16_t paywords;
         
     /* Update the payload words in header */
-    paywords = __be16_to_cpu(p_hdr->lrh[2]) + 
-      (PSM_CRC_SIZE_IN_BYTES >> BYTE2WORD_SHIFT);
-    p_hdr->lrh[2] = __cpu_to_be16(paywords);
+    paywords = (sizeof(struct ips_message_header) +
+		paylen + PSM_CRC_SIZE_IN_BYTES) >> BYTE2WORD_SHIFT;
+    p_hdr->lrh[2] = __cpu_to_be16(paywords + SIZE_OF_CRC);
 
     /* Need to regenerate KDETH checksum after updating payload length */
     ips_kdeth_cksum(p_hdr); 
@@ -278,18 +278,61 @@ uint32_t ips_proto_dest_context_from_header(struct ips_proto *proto,
 }
 
 PSMI_ALWAYS_INLINE(
-void ips_proto_hdr(struct ips_message_header *p_hdr, 
+void ips_proto_hdr(ips_scb_t *scb,
 		   struct ips_epinfo *epinfo, 
 		   struct ips_epinfo_remote *epr,
 		   struct ips_flow *flow,
 		   uint32_t paywords, 
 		   uint32_t extra_bytes, 
-		   uint16_t tid, 
-		   uint16_t tid_offset, 
 		   uint16_t kpf_flags,
 		   uint8_t flags))
 {
- 
+    struct ips_message_header *p_hdr = &scb->ips_lrh;
+
+    /*
+     * This scb has been used by this connection last time,
+     * so some of the header fields are already set.
+     */
+    if (scb->flow == flow && scb->epaddr == flow->ipsaddr) {
+	p_hdr->bth[2]      = __cpu_to_be32(flow->xmit_seq_num.psn);
+	p_hdr->flags       = flags;
+	p_hdr->ack_seq_num = flow->recv_seq_num.psn;
+
+	/* check if extra bytes is changed */
+	if (scb->extra_bytes != extra_bytes) {
+	    p_hdr->bth[0] =
+		__cpu_to_be32((IPATH_OPCODE_USER1 << BTH_OPCODE_SHIFT) +
+		(extra_bytes << BTH_EXTRA_BYTE_SHIFT) +
+		flow->path->epr_pkey);
+	    scb->extra_bytes = extra_bytes;
+	}
+
+	/* If header is exactly the same */
+	if (scb->tid == IPATH_EAGER_TID_ID &&
+		scb->pkt_flags == kpf_flags &&
+		scb->payload_bytes == scb->payload_size) {
+	    return;
+	}
+
+	/* context, version, and TID are already known to be in range, no
+	 * masking needed; offset in low INFINIPATH_I_OFFSET_MASK  bits */
+	p_hdr->iph.ver_context_tid_offset = __cpu_to_le32(
+		(IPS_PROTO_VERSION << INFINIPATH_I_VERS_SHIFT) +
+		(epr->epr_pkt_context << INFINIPATH_I_CONTEXT_SHIFT) +
+		(scb->tid << INFINIPATH_I_TID_SHIFT) +
+		(scb->offset >> 2)); // convert from byte to word offset
+
+	p_hdr->lrh[2] = __cpu_to_be16(paywords + SIZE_OF_CRC);
+	p_hdr->iph.pkt_flags = __cpu_to_le16(kpf_flags);
+
+	ips_kdeth_cksum(p_hdr); // Generate KDETH checksum
+
+	scb->pkt_flags = kpf_flags;
+	scb->payload_bytes = scb->payload_size;
+
+	return;
+    }
+
     p_hdr->lrh[0] = 
     __cpu_to_be16(IPATH_LRH_BTH |
 		  (flow->sl << 4) |  /* SL for flow */     
@@ -311,8 +354,8 @@ void ips_proto_hdr(struct ips_message_header *p_hdr,
     p_hdr->iph.ver_context_tid_offset = __cpu_to_le32(
         (IPS_PROTO_VERSION << INFINIPATH_I_VERS_SHIFT) +
         (epr->epr_pkt_context << INFINIPATH_I_CONTEXT_SHIFT) +
-        (tid << INFINIPATH_I_TID_SHIFT) +
-        (tid_offset >> 2)); // convert from byte to word offset
+        (scb->tid << INFINIPATH_I_TID_SHIFT) +
+        (scb->offset >> 2)); // convert from byte to word offset
     p_hdr->iph.pkt_flags = __cpu_to_le16(kpf_flags);
     
     ips_kdeth_cksum(p_hdr); // Generate KDETH checksum
@@ -323,6 +366,14 @@ void ips_proto_hdr(struct ips_message_header *p_hdr,
     IPS_HEADER_SRCCONTEXT_SET(p_hdr, epinfo->ep_context);
     p_hdr->src_subcontext = epinfo->ep_subcontext;
     p_hdr->dst_subcontext = epr->epr_subcontext;
+
+    scb->extra_bytes   = extra_bytes;
+    scb->pkt_flags     = kpf_flags;
+    scb->payload_bytes = scb->payload_size;
+    scb->flow          = flow;
+    scb->epaddr        = flow->ipsaddr;
+
+    return;
 }
 
 /* 
@@ -338,34 +389,39 @@ ips_scb_prepare_flow_inner(ips_scb_t *scb,
 		     struct ips_epinfo_remote *epr,
 		     struct ips_flow *flow))
 {
-    int extra_bytes;
+    uint32_t extra_bytes;
     uint32_t tot_paywords;
     uint16_t pkt_flags = 0;
     
-    scb->payload_size += 3;
-    extra_bytes = 3 - (scb->payload_size & 3);
-    scb->payload_size &= ~3;
-    psmi_assert(scb->payload_size <= flow->path->epr_mtu);
+    extra_bytes = scb->payload_size & 3;
+    if (extra_bytes) {
+      extra_bytes = 4 - extra_bytes;
+      scb->payload_size += extra_bytes;
+    }
     tot_paywords = (sizeof(struct ips_message_header) + scb->payload_size) 
                     >> BYTE2WORD_SHIFT;
     pkt_flags |= (scb->flags & IPS_SEND_FLAG_INTR) ? INFINIPATH_KPF_INTR : 0;
     pkt_flags |= (scb->flags & IPS_SEND_FLAG_HDR_SUPPRESS) ?
       INFINIPATH_KPF_HDRSUPP : 0;
     
-    ips_proto_hdr(&scb->ips_lrh, epinfo, epr, flow,
-		  tot_paywords, extra_bytes, scb->tid, scb->offset,
+    ips_proto_hdr(scb, epinfo, epr, flow,
+		  tot_paywords, extra_bytes,
 		  pkt_flags, ips_flow_gen_ackflags(scb, flow));		  
 
     scb->ack_timeout = flow->path->epr_timeout_ack;
     scb->abs_timeout = TIMEOUT_INFINITE;
-    scb->seq_num     = flow->xmit_seq_num;
     scb->flags      |= IPS_SEND_FLAG_PENDING;
 
-    if (flow->protocol == PSM_PROTOCOL_TIDFLOW)
-      flow->xmit_seq_num.seq += 1;
-    else
-      ADVANCE_SEQ_NUM(flow->xmit_seq_num.psn);
-    
+    if (flow->protocol == PSM_PROTOCOL_TIDFLOW) {
+      flow->xmit_seq_num.seq += scb->nfrag;
+      scb->seq_num = flow->xmit_seq_num;
+      scb->seq_num.seq--;
+    } else {
+      flow->xmit_seq_num.pkt += scb->nfrag;
+      scb->seq_num = flow->xmit_seq_num;
+      scb->seq_num.pkt--;
+    }
+
     return;
 }
 
@@ -470,9 +526,9 @@ ips_proto_is_expected_or_nak(struct ips_recvhdrq_event *rcv_ev))
 {
     ips_epaddr_t *ipsaddr = rcv_ev->ipsaddr;
     struct ips_message_header *p_hdr = rcv_ev->p_hdr;
-    uint32_t sequence_num = __be32_to_cpu(p_hdr->bth[2]) & LOWER_24_BITS;
     ptl_epaddr_flow_t flowid = ips_proto_flowid(p_hdr);
     struct ips_flow *flow = &ipsaddr->flows[flowid];
+    psmi_seqnum_t sequence_num;
     
     psmi_assert((flowid == EP_FLOW_GO_BACK_N_PIO) ||
 		(flowid == EP_FLOW_GO_BACK_N_DMA) ||
@@ -490,8 +546,9 @@ ips_proto_is_expected_or_nak(struct ips_recvhdrq_event *rcv_ev))
       rcv_ev->is_congested &= ~IPS_RECV_EVENT_FECN; /* Clear FECN event */
     }
     
-    if_pf (flow->recv_seq_num.psn != sequence_num) {
-      int16_t diff = (int16_t) (sequence_num - flow->last_seq_num.val);
+    sequence_num.val = __be32_to_cpu(p_hdr->bth[2]);
+    if_pf (flow->recv_seq_num.pkt != sequence_num.pkt) {
+      int16_t diff = (int16_t) (sequence_num.pkt - flow->last_seq_num.pkt);
       
       if (diff < 0)
 	return 0;
@@ -500,9 +557,9 @@ ips_proto_is_expected_or_nak(struct ips_recvhdrq_event *rcv_ev))
       if (flow->cca_ooo_pkts > flow->ack_interval) {
 	ipsaddr->stats.congestion_pkts++;
 	flow->flags |= IPS_FLOW_FLAG_GEN_BECN;
-	_IPATH_CCADBG("BECN Generation. Expected: %d, Got: %d.\n", flow->recv_seq_num.psn, sequence_num);
+	_IPATH_CCADBG("BECN Generation. Expected: %d, Got: %d.\n", flow->recv_seq_num.pkt, sequence_num.pkt);
       }
-      flow->last_seq_num.val = sequence_num;
+      flow->last_seq_num = sequence_num;
       
       if (!(flow->flags & IPS_FLOW_FLAG_NAK_SEND)) {	
 	/* Queue/Send NAK to peer  */
@@ -524,11 +581,43 @@ ips_proto_is_expected_or_nak(struct ips_recvhdrq_event *rcv_ev))
     else {
       flow->flags &= ~IPS_FLOW_FLAG_NAK_SEND;
       
-      flow->recv_seq_num.psn += 1;
-      flow->last_seq_num.val = flow->recv_seq_num.val;
+      flow->last_seq_num = sequence_num;
+      flow->recv_seq_num.pkt += 1;
       flow->cca_ooo_pkts = 0;
       return 1;
     }
+}
+
+/*
+ * Return value:
+ *	1: in order message;
+ *	0: out of order, no touch;
+ *	-1: out of order, buffered in outoforder queue.
+ */
+PSMI_ALWAYS_INLINE(
+int 
+ips_proto_check_msg_order(psm_epaddr_t epaddr,
+	struct ips_flow *flow, struct ips_message_header *p_hdr))
+{
+  uint16_t msg_seqnum = (uint16_t)(flow->last_seq_num.msg +
+			((p_hdr->ack_seq_num>>8)&0xff00));
+
+  if (msg_seqnum != epaddr->mctxt_master->mctxt_recv_seqnum) {
+    flow->msg_ooo_toggle = !flow->msg_ooo_toggle;
+
+    if (flow->msg_ooo_toggle) {
+	flow->recv_seq_num.pkt -= 1;
+	flow->msg_ooo_seqnum = msg_seqnum;
+	return 0;
+    }
+
+    psmi_assert(msg_seqnum == flow->msg_ooo_seqnum);
+    return -1;
+  }
+
+  flow->msg_ooo_toggle = 0;
+  epaddr->mctxt_master->mctxt_recv_seqnum++;
+  return 1;
 }
 
 #if IPS_TINY_PROCESS_MQTINY
@@ -537,21 +626,43 @@ int
 ips_proto_process_mq_tiny(const struct ips_recvhdrq_event *rcv_ev))
 {
   ips_epaddr_t *ipsaddr = rcv_ev->ipsaddr;
+  psm_epaddr_t epaddr = ipsaddr->epaddr;
   struct ips_message_header *p_hdr = rcv_ev->p_hdr;
+  ptl_epaddr_flow_t flowid = ips_proto_flowid(p_hdr);
+  struct ips_flow *flow = &ipsaddr->flows[flowid];
+  int ret = IPS_RECVHDRQ_CONTINUE;
   
   if (ips_proto_is_expected_or_nak((struct ips_recvhdrq_event*) rcv_ev)) {
-    psmi_mq_handle_tiny_envelope(
-				 ipsaddr->proto->mq,
-				 ipsaddr->epaddr, p_hdr->data[0].u64, /* tag */
-				 (void *) &p_hdr->data[1], 
-				 (uint32_t) p_hdr->hdr_dlen);
-    
-    if (p_hdr->flags & IPS_SEND_FLAG_ACK_REQ)
-      ips_proto_send_ack((struct ips_recvhdrq *) rcv_ev->recvq, 
-			 &ipsaddr->flows[ips_proto_flowid(p_hdr)]);
+    ret = ips_proto_check_msg_order(epaddr, flow, p_hdr);
+    if (ret == 0) return IPS_RECVHDRQ_OOO;
+    if (ret == -1) {
+	psmi_mq_handle_envelope_outoforder(ipsaddr->proto->mq,
+		(uint16_t) p_hdr->mqhdr,
+		epaddr, flow->msg_ooo_seqnum,
+		p_hdr->data[0].u64, /* tag */
+		epaddr->xmit_egrlong, /* place hold only */
+		(uint32_t) p_hdr->hdr_dlen,
+		(void *) &p_hdr->data[1],
+		(uint32_t) p_hdr->hdr_dlen);
+	ret = IPS_RECVHDRQ_BREAK;
+    } else {
+	psmi_mq_handle_tiny_envelope(
+		ipsaddr->proto->mq,
+		epaddr, p_hdr->data[0].u64, /* tag */
+		(void *) &p_hdr->data[1], 
+		(uint32_t) p_hdr->hdr_dlen);
+	if (epaddr->mctxt_master->outoforder_c) {
+	    psmi_mq_handle_outoforder_queue(epaddr->mctxt_master);
+	}
+	ret = IPS_RECVHDRQ_CONTINUE;
+    }
+    if ((p_hdr->flags & IPS_SEND_FLAG_ACK_REQ)  ||
+	(flow->flags & IPS_FLOW_FLAG_GEN_BECN))
+      ips_proto_send_ack((struct ips_recvhdrq *) rcv_ev->recvq, flow);
   }
   
-  return IPS_RECVHDRQ_CONTINUE;
+  ips_proto_process_ack((struct ips_recvhdrq_event *) rcv_ev);
+  return ret;
 }
 #endif
 
@@ -562,9 +673,7 @@ ips_proto_process_packet(const struct ips_recvhdrq_event *rcv_ev))
 #if IPS_TINY_PROCESS_MQTINY
     if (rcv_ev->p_hdr->sub_opcode == OPCODE_SEQ_MQ_HDR) {
 	psmi_assert(rcv_ev->ptype == RCVHQ_RCV_TYPE_EAGER);
-	ips_proto_process_mq_tiny(rcv_ev);
-	ips_proto_process_ack((struct ips_recvhdrq_event *) rcv_ev);
-	return IPS_RECVHDRQ_CONTINUE;
+	return ips_proto_process_mq_tiny(rcv_ev);
     }
     else 
 #endif

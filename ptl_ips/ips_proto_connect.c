@@ -107,7 +107,7 @@ struct ips_connect_reqrep {
 /* Used for sanity checking in processing message arrivals */
 #define IPS_CONNECT_REQREP_MINIMUM_SIZE	\
 	(offsetof(struct ips_connect_reqrep, version_1_offset))
-#define IPS_MAX_CONNECT_PAYLEN 384
+#define IPS_MAX_CONNECT_PAYLEN 512
 
 struct ips_disconnect_reqrep {
     struct connect_msghdr  hdr;
@@ -251,10 +251,11 @@ node_matches_bitendian(psm_ep_t ep, uint32_t features)
  * the pio send buffer sizes (i.e. 4K IB MTU but only 2K PIO buffers).
  */
 static
-void
+psm_error_t
 ips_ipsaddr_set_req_params(struct ips_proto *proto,
 			   ips_epaddr_t *ipsaddr, 
-			   const struct ips_connect_reqrep *req)
+			   const struct ips_connect_reqrep *req,
+			   uint32_t paylen)
 {
     psmi_assert_always(req->mtu > 0);
 
@@ -292,7 +293,22 @@ ips_ipsaddr_set_req_params(struct ips_proto *proto,
 	}
     }
     
-    return;
+    if (paylen > sizeof(struct ips_connect_reqrep)) {
+	int count;
+	char *p = (char *)(req + 1);
+	paylen -= sizeof(struct ips_connect_reqrep);
+	if (paylen%(sizeof(uint64_t)+sizeof(psm_epid_t))) {
+	    return PSM_INTERNAL_ERR;
+	}
+	count = paylen / (sizeof(uint64_t)+sizeof(psm_epid_t));
+	memcpy(ipsaddr->epaddr->mctxt_gidhi, p, count*sizeof(uint64_t));
+	p += count*sizeof(uint64_t);
+	memcpy(ipsaddr->epaddr->mctxt_epid, p, count*sizeof(psm_epid_t));
+	ipsaddr->epaddr->mctxt_epcount = count;
+    }
+
+    return psmi_epid_set_hostname(psm_epid_nid(ipsaddr->epaddr->epid), 
+				       (char*) req->hostname, 0);
 }
 
 static psm_error_t __recvpath
@@ -390,6 +406,30 @@ ips_proto_build_connect_message(struct ips_proto *proto,
 		sizeof(req->hostname) - 1);
 	    req->hostname[sizeof(req->hostname) - 1] = '\0';
 	    paylen	      = sizeof(struct ips_connect_reqrep);
+
+	    /* Attach all multi-context subnetids and epids. */
+	    if (proto->ep->mctxt_master == proto->ep) {
+		psm_epid_t *epid;
+		psm_ep_t ep = proto->ep->mctxt_next;
+		uint64_t *subnetid = (uint64_t *)(req + 1);
+		/* first all subnetids */
+		while (ep != proto->ep) {
+			*subnetid = ep->gid_hi;
+			subnetid++;
+			ep = ep->mctxt_next;
+			paylen += sizeof(uint64_t);
+		}
+		ep = proto->ep->mctxt_next;
+		epid = (psm_epid_t *)subnetid;
+		/* second all epids */
+		while (ep != proto->ep) {
+			*epid = ep->epid;
+			epid++;
+			ep = ep->mctxt_next;
+			paylen += sizeof(psm_epid_t);
+		}
+	    }
+	    psmi_assert_always(paylen <= IPS_MAX_CONNECT_PAYLEN); 
 	break;
 
 	case OPCODE_DISCONNECT_REQUEST:
@@ -410,6 +450,9 @@ ips_flow_init(struct ips_flow *flow, ips_path_rec_t *path, ips_epaddr_t *ipsaddr
 {
     struct ips_proto *proto = ipsaddr->proto;
     
+    psmi_assert_always(protocol < IPS_MAX_PROTOCOL);
+    psmi_assert_always(flow_index < IPS_MAX_FLOWINDEX);
+
     SLIST_NEXT(flow, next) = NULL;
     flow->fn.xfer = psmi_xfer_fn[transfer_type];
     flow->fn.protocol = psmi_protocol_fn[protocol];
@@ -426,6 +469,7 @@ ips_flow_init(struct ips_flow *flow, ips_path_rec_t *path, ips_epaddr_t *ipsaddr
     flow->flowid  = IPS_FLOWID_PACK(protocol, flow_index);
     flow->xmit_seq_num.val = 0;
     flow->xmit_ack_num.val = 0;
+    flow->xmit_ack_num.pkt--; /* last acked */
     flow->recv_seq_num.val = 0;
     flow->flags = 0;
     flow->sl    = flow->path->epr_sl;
@@ -434,8 +478,6 @@ ips_flow_init(struct ips_flow *flow, ips_path_rec_t *path, ips_epaddr_t *ipsaddr
     flow->ack_interval = max((proto->flow_credits >> 2) - 1, 1);
     flow->scb_num_pending = 0;
     flow->scb_num_unacked = 0;
-    flow->xmit_egrlong.egr_flowid = flow_index;
-    flow->xmit_egrlong.egr_msgno  = 0;
 
     psmi_timer_entry_init(&(flow->timer_ack),
 			  ips_proto_timer_ack_callback, flow);
@@ -519,8 +561,14 @@ ips_alloc_epaddr(struct ips_proto *proto, psm_epid_t epid,
     epaddr->ptl  = proto->ptl;
     epaddr->ptlctl = proto->ptl->ctl;
     epaddr->ep = proto->ep;
-    for (i = 0; i < EP_FLOW_LAST; i++)
-      STAILQ_INIT(&epaddr->egrlong[i]);
+    STAILQ_INIT(&epaddr->egrlong);
+    STAILQ_INIT(&epaddr->egrdata);
+    epaddr->xmit_egrlong.egr_data = 0;
+    epaddr->outoforder_q.first = NULL;
+    epaddr->outoforder_q.lastp = &epaddr->outoforder_q.first;
+    epaddr->mctxt_master = epaddr;
+    epaddr->mctxt_current = epaddr;
+    epaddr->mctxt_prev = epaddr->mctxt_next = epaddr;
     
     /* IPS-level epaddr */
     ipsaddr = (ips_epaddr_t *)(epaddr+1);
@@ -621,6 +669,11 @@ ips_alloc_epaddr(struct ips_proto *proto, psm_epid_t epid,
 		  ipsaddr, PSM_TRANSFER_PIO, PSM_PROTOCOL_GO_BACK_N,
 		  IPS_PATH_NORMAL_PRIORITY, EP_FLOW_GO_BACK_N_AM_RSP);
 
+    /* tidflow for tid get request */
+    ips_flow_init(&ipsaddr->tidgr_flow, NULL, ipsaddr,
+		  PSM_TRANSFER_DMA, PSM_PROTOCOL_TIDFLOW,
+		  IPS_PATH_LOW_PRIORITY, 0);
+
     ipsaddr->cstate_to   = CSTATE_NONE;
     ipsaddr->cstate_from = CSTATE_NONE;
 
@@ -693,7 +746,7 @@ static
 psm_error_t 
 ptl_handle_connect_req(struct ips_proto *proto, psm_epid_t epid, 
 		       psm_epaddr_t epaddr, struct ips_connect_reqrep *req, 
-		       int uuid_valid);
+		       uint32_t paylen, int uuid_valid);
 
 psm_error_t
 ips_proto_process_connect(struct ips_proto *proto, psm_epid_t epid, 
@@ -778,7 +831,7 @@ ips_proto_process_connect(struct ips_proto *proto, psm_epid_t epid,
     switch (opcode) {
 	case OPCODE_CONNECT_REQUEST:
 	    err = ptl_handle_connect_req(proto, epid, epaddr, 
-		    (struct ips_connect_reqrep *) payload, uuid_valid);
+		    (struct ips_connect_reqrep *) payload, paylen, uuid_valid);
 	    break;
 
 	case OPCODE_CONNECT_REPLY:
@@ -801,16 +854,15 @@ ips_proto_process_connect(struct ips_proto *proto, psm_epid_t epid,
 		break;
 	    }
 	    connect_result = __be16_to_cpu(req->connect_result);
+
 	    /* Reply to our request for connection (i.e. outgoing connection) */
-	    ips_ipsaddr_set_req_params(proto, ipsaddr, req);
+	    if (ipsaddr->cstate_from != CSTATE_ESTABLISHED) {
+		err = ips_ipsaddr_set_req_params(proto, ipsaddr, req, paylen);
+		if (err) goto fail;
+	    }
 	    ipsaddr->cstate_to  = CSTATE_ESTABLISHED;
 	    ipsaddr->cerror_to  = connect_result;
 
-	    if (psmi_epid_set_hostname(psm_epid_nid(epid), 
-				       (char*) req->hostname, 0)) {
-		err = PSM_NO_MEMORY;
-		goto fail;
-	    }
 	    break;
 
 	case OPCODE_DISCONNECT_REQUEST:
@@ -921,7 +973,7 @@ static
 psm_error_t 
 ptl_handle_connect_req(struct ips_proto *proto, psm_epid_t epid, 
 		       psm_epaddr_t epaddr, struct ips_connect_reqrep *req, 
-		       int uuid_valid)
+		       uint32_t paylen, int uuid_valid)
 {
     ips_epaddr_t *ipsaddr;
     psm_error_t	err = PSM_OK;
@@ -931,7 +983,6 @@ ptl_handle_connect_req(struct ips_proto *proto, psm_epid_t epid,
     uint16_t features;
     int newconnect = 0;
     char buf[IPS_MAX_CONNECT_PAYLEN];
-    static int done_warning = 0;
 
     if (epid == proto->ep->epid) {
 	/* For 2.0, we won't expose handling for this error */
@@ -971,20 +1022,15 @@ ptl_handle_connect_req(struct ips_proto *proto, psm_epid_t epid,
 		req->runid_key);
 	}
 	else { /* Some out of context message.  Just drop it */
-	    if (!done_warning) {
+	    if (!proto->done_warning) {
 		psmi_syslog(proto->ep, 1, LOG_INFO, 
 		    "Non-fatal connection problem: Received an out-of-context "
 		    "connection message from host %s LID=0x%x context=%d. (Ignoring)",
 		    req->hostname, (int) psm_epid_nid(epid), psm_epid_context(epid));
-		done_warning = 1;
+		proto->done_warning = 1;
 	    }
 	    goto no_reply;
 	}
-    }
-    else { /* just update hostname */
-	 if ((err = psmi_epid_set_hostname(psm_epid_nid(epid), 
-					   req->hostname, 0)))
-	    goto fail;
     }
     psmi_assert_always(ipsaddr->cstate_from == CSTATE_NONE);
 
@@ -1041,7 +1087,10 @@ ptl_handle_connect_req(struct ips_proto *proto, psm_epid_t epid,
     ipsaddr->psm_verno = psm_verno;
 
     /* Incoming connection request */
-    ips_ipsaddr_set_req_params(proto, ipsaddr, req);
+    if (ipsaddr->cstate_to != CSTATE_ESTABLISHED) {
+	err = ips_ipsaddr_set_req_params(proto, ipsaddr, req, paylen);
+	if (err) goto fail;
+    }
     ipsaddr->cstate_from = CSTATE_ESTABLISHED;
     ipsaddr->cerror_from = connect_result;
 
@@ -1254,9 +1303,6 @@ ips_proto_connect(struct ips_proto *proto, int numep,
 		    to_warning_next = get_cycles() + to_warning_interval;
 		}
 
-		if ((err = psmi_err_only(psmi_poll_internal(proto->ep, 1))))
-		    goto fail;
-
 		if (get_cycles() > ipsaddr->s_timeout) {
 		    if (!ipsaddr->credit && connect_credits) {
 		        ipsaddr->credit = 1;
@@ -1282,6 +1328,20 @@ ips_proto_connect(struct ips_proto *proto, int numep,
 		    else {
 		        keep_polling = 0;
 		    }
+		}
+
+		if ((err = psmi_err_only(psmi_poll_internal(proto->ep, 1))))
+		    goto fail;
+
+		if (ipsaddr->cstate_to == CSTATE_ESTABLISHED) {
+		/* This is not the real error code, we only set OK here
+		 * so we know to stop polling for the reply. The actual
+		 * error is in ipsaddr->cerror_to */
+		    array_of_errors[i] = PSM_OK;
+		    numep_left--;
+		    connect_credits++;
+		    ipsaddr->credit = 0;
+		    break;
 		}
 	    }
 	}

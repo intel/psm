@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -77,6 +78,7 @@ struct ips_tf {
 };
 
 struct ips_tfctrl {
+  const psmi_context_t		*context;
   
   uint32_t                      tf_start_idx;
   uint32_t                      tf_end_idx;
@@ -101,7 +103,8 @@ ips_tf_available(struct ips_tfctrl *tfctrl))
   return tfctrl->tf_num_avail;
 }
 
-psm_error_t ips_tf_init(struct ips_tfctrl *tfctrl, 
+psm_error_t ips_tf_init(const psmi_context_t *context,
+			struct ips_tfctrl *tfctrl, 
 			int start_flowidx, 
 			int end_flowidx,
 			ips_tf_avail_cb_fn_t cb,

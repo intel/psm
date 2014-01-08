@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -59,7 +60,8 @@ struct psmi_epid_tabentry {
     psm_ep_t   ep;
     psm_epid_t epid;
 };
-struct psmi_epid_table psmi_epid_table;
+
+extern struct psmi_epid_table psmi_epid_table;
 #define EPADDR_DELETED	((void *)-1)	/* tag used to mark deleted entries */
 #define PSMI_EPID_TABSIZE_CHUNK	 128
 #define PSMI_EPID_TABLOAD_FACTOR ((float)0.7)
@@ -190,7 +192,7 @@ struct psmi_rlimit_mpool {
     }
     mode[PSMI_MEMMODE_NUM];
 };
-psm_error_t psmi_ep_parse_mpool_env(const psm_ep_t ep, int level,
+psm_error_t psmi_parse_mpool_env(const psm_mq_t mq, int level,
 				    const struct psmi_rlimit_mpool *rlim,
 				    uint32_t *valo, uint32_t *chunkszo);
 int psmi_parse_memmode(void);

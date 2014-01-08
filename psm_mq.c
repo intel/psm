@@ -359,7 +359,7 @@ __psm_mq_isend(psm_mq_t mq, psm_epaddr_t dest, uint32_t flags, uint64_t stag,
     PSMI_ASSERT_INITIALIZED();
 
     PSMI_PLOCK();
-    err = dest->ptlctl->mq_isend(dest->ptl, mq, dest, flags, stag, buf, len, context, req);
+    err = dest->ptlctl->mq_isend(mq, dest, flags, stag, buf, len, context, req);
     PSMI_PUNLOCK();
 
 #if 0
@@ -386,7 +386,7 @@ __psm_mq_send(psm_mq_t mq, psm_epaddr_t dest, uint32_t flags, uint64_t stag,
     PSMI_ASSERT_INITIALIZED();
 
     PSMI_PLOCK();
-    err =  dest->ptlctl->mq_send(dest->ptl, mq, dest, flags, stag, buf, len);
+    err =  dest->ptlctl->mq_send(mq, dest, flags, stag, buf, len);
     PSMI_PUNLOCK();
     return err;
 }
@@ -591,7 +591,6 @@ __psm_mq_init(psm_ep_t ep, uint64_t tag_order_mask,
 	    const struct psm_optkey *opts, 
 	    int numopts, psm_mq_t *mqo)
 {
-    static int done_mq_alloc = 0;
     psm_error_t err = PSM_OK;
     psm_mq_t mq = ep->mq;
     int i;
@@ -600,11 +599,6 @@ __psm_mq_init(psm_ep_t ep, uint64_t tag_order_mask,
 
     psmi_assert(mq != NULL);
     psmi_assert(mq->ep != NULL);
-
-    if (++done_mq_alloc != 1) {
-	err = psmi_handle_error(ep, PSM_PARAM_ERR, "MQ already initialized");
-	goto fail;
-    }
 
     /* Process options */
     for (i = 0; err == PSM_OK && i < numopts; i++) 
@@ -622,7 +616,15 @@ PSMI_API_DECL(psm_mq_init)
 psm_error_t
 __psm_mq_finalize(psm_mq_t mq)
 {
+    psm_ep_t	ep;
     PSMI_ERR_UNLESS_INITIALIZED(mq->ep);
+
+    ep = mq->ep;
+    do {
+	ep->mq = NULL;
+	ep = ep->mctxt_next;
+    } while (ep != mq->ep);
+
     return psmi_mq_free(mq);
 }
 PSMI_API_DECL(psm_mq_finalize)
@@ -635,18 +637,19 @@ __psm_mq_get_stats(psm_mq_t mq, psm_mq_stats_t *stats)
 PSMI_API_DECL(psm_mq_get_stats)
 
 psm_error_t
-psmi_mq_malloc(psm_ep_t ep, psm_mq_t *mqo)
+psmi_mq_malloc(psm_mq_t *mqo)
 {
     psm_error_t err = PSM_OK;
 
-    psm_mq_t mq = (psm_mq_t) psmi_calloc(ep, UNDEFINED, 1, sizeof(struct psm_mq));
+    psm_mq_t mq = (psm_mq_t) psmi_calloc(NULL, UNDEFINED, 1, sizeof(struct psm_mq));
     if (mq == NULL) {
-	err = psmi_handle_error(ep, PSM_NO_MEMORY,
+	err = psmi_handle_error(NULL, PSM_NO_MEMORY,
 		"Couldn't allocate memory for mq endpoint");
 	goto fail;
     }
 
-    mq->ep = ep;
+    mq->ep = NULL;
+    mq->memmode = psmi_parse_memmode();
     mq->expected_q.first = NULL;
     mq->expected_q.lastp = &mq->expected_q.first;
     mq->unexpected_q.first = NULL;
@@ -705,7 +708,7 @@ psmi_mq_initialize_defaults(psm_mq_t mq)
     psmi_getenv("PSM_MQ_RNDV_IPATH_WINDOW", 
 		"ipath rendezvous window size",
 		PSMI_ENVVAR_LEVEL_HIDDEN, PSMI_ENVVAR_TYPE_UINT,
-		(union psmi_envvar_val) 131072, &env_rvwin);
+		(union psmi_envvar_val) mq->ipath_window_rv, &env_rvwin);
     mq->ipath_window_rv = env_rvwin.e_uint;
 
     return PSM_OK;

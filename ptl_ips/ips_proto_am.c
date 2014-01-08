@@ -40,8 +40,6 @@
 
 #define IPS_AMFLAG_ISTINY 1
 
-psm_am_handler_fn_t psmi_am_htable[PSMI_AM_NUM_HANDLERS];
-
 struct ips_am_token { 
     struct psmi_am_token    tok;
   
@@ -77,6 +75,7 @@ ips_proto_am_fini(struct ips_proto_am *proto_am)
 static
 psm_error_t
 am_short_reqrep(struct ips_proto_am *proto_am, ips_scb_t *scb,
+		struct ptl_epaddr *ipsaddr,
 		psm_amarg_t *args, int nargs, uint8_t sub_opcode,
 		void *src, size_t len, int flags, int pad_bytes)
 		    
@@ -85,7 +84,7 @@ am_short_reqrep(struct ips_proto_am *proto_am, ips_scb_t *scb,
     ptl_epaddr_flow_t flowid = ((sub_opcode == OPCODE_AM_REQUEST) || 
 				(sub_opcode == OPCODE_AM_REQUEST_NOREPLY)) ?
       EP_FLOW_GO_BACK_N_AM_REQ : EP_FLOW_GO_BACK_N_AM_RSP;
-    struct ips_flow *flow = &scb->epaddr->flows[flowid];
+    struct ips_flow *flow = &ipsaddr->flows[flowid];
 
     _IPATH_VDBG("%s src=%p len=%d, nargs=%d\n", 
 		((sub_opcode == OPCODE_AM_REQUEST) ||
@@ -169,11 +168,10 @@ calculate_pad_bytes (struct ips_proto_am *proto_am, int nargs, size_t len)
 static inline
 void
 ips_am_scb_init(ips_scb_t *scb, uint8_t handler, int nargs, 
-		struct ptl_epaddr *ipsaddr, int pad_bytes,
+		int pad_bytes,
 		psm_am_completion_fn_t completion_fn,
 		void *completion_ctxt)
 {
-    scb->epaddr = ipsaddr;
     scb->completion_am = completion_fn;
     scb->cb_param = completion_ctxt;
     scb->ips_lrh.amhdr_hidx = handler;
@@ -186,13 +184,13 @@ ips_am_scb_init(ips_scb_t *scb, uint8_t handler, int nargs,
 }
 
 psm_error_t
-ips_am_short_request(ptl_t *ptl, psm_epaddr_t epaddr, 
+ips_am_short_request(psm_epaddr_t epaddr, 
                      psm_handler_t handler, psm_amarg_t *args, int nargs,
 		     void *src, size_t len, int flags, 
 		     psm_am_completion_fn_t completion_fn, 
 		     void *completion_ctxt)
 {
-    struct ips_proto_am *proto_am = &ptl->proto.proto_am;
+    struct ips_proto_am *proto_am = &epaddr->ptl->proto.proto_am;
     psm_error_t err;
     ips_scb_t *scb;
     int pad_bytes = calculate_pad_bytes(proto_am, nargs, len);
@@ -207,21 +205,21 @@ ips_am_short_request(ptl_t *ptl, psm_epaddr_t epaddr,
 	((nargs - PSM_AM_HDR_QWORDS) << 3) : 0;
       
       /* len + pad_bytes + overflow_args */
-      PSMI_BLOCKUNTIL(ptl->ep,err,
+      PSMI_BLOCKUNTIL(epaddr->ep,err,
 	((scb = ips_scbctrl_alloc(proto_am->scbc_request, 1, 
 				  len + pad_bytes + arg_sz,
 				  IPS_SCB_FLAG_ADD_BUFFER)) != NULL));
     }
     else {
-      PSMI_BLOCKUNTIL(ptl->ep,err,
+      PSMI_BLOCKUNTIL(epaddr->ep,err,
 	   ((scb = ips_scbctrl_alloc_tiny(proto_am->scbc_request)) != NULL));
     }
 
     psmi_assert_always(scb != NULL);
-    ips_am_scb_init(scb, handler, nargs, epaddr->ptladdr, pad_bytes,
+    ips_am_scb_init(scb, handler, nargs, pad_bytes,
 		    completion_fn, completion_ctxt);
 
-    return am_short_reqrep(proto_am, scb, args, nargs, 
+    return am_short_reqrep(proto_am, scb, epaddr->ptladdr, args, nargs, 
 			   (flags & PSM_AM_FLAG_NOREPLY) ?
 			   OPCODE_AM_REQUEST_NOREPLY : OPCODE_AM_REQUEST, 
 			   src, len, flags, pad_bytes);
@@ -264,9 +262,9 @@ ips_am_short_reply(psm_am_token_t tok,
     }
     
     psmi_assert_always(scb != NULL);
-    ips_am_scb_init(scb, handler, nargs, ipsaddr, pad_bytes,
+    ips_am_scb_init(scb, handler, nargs, pad_bytes,
 		    completion_fn, completion_ctxt);
-    am_short_reqrep(proto_am, scb, args, nargs, OPCODE_AM_REPLY,
+    am_short_reqrep(proto_am, scb, ipsaddr, args, nargs, OPCODE_AM_REPLY,
 		    src, len, flags, pad_bytes);
     return PSM_OK;
 }
@@ -319,7 +317,7 @@ ips_am_run_handler(struct ips_am_token *tok,
 }
 
 int
-ips_proto_am(const struct ips_recvhdrq_event *rcv_ev)
+ips_proto_am(struct ips_recvhdrq_event *rcv_ev)
 {
     struct ips_am_token token;
     struct ips_message_header *p_hdr = rcv_ev->p_hdr;
@@ -329,23 +327,29 @@ ips_proto_am(const struct ips_recvhdrq_event *rcv_ev)
     struct ips_flow *flow = &ipsaddr->flows[flowid];
     int ret = IPS_RECVHDRQ_CONTINUE;
     
+/*
+ * Based on AM request/reply traffic pattern, if we don't have
+ * a reply scb slot then we can't process the request packet,
+ * we just silently drop it. Otherwise, it will be a deadlock.
+ * note: ips_proto_is_expected_or_nak() can not be called in this case.
+ */
     if (p_hdr->sub_opcode == OPCODE_AM_REQUEST &&
-	!ips_scbctrl_avail(&proto_am->scbc_reply)) {
-      proto_am->amreply_nobufs++;
-      return ret;
+		!ips_scbctrl_avail(&proto_am->scbc_reply)) {
+	proto_am->amreply_nobufs++;
+	return ret;
     }
-    
-    if (!ips_proto_is_expected_or_nak((struct ips_recvhdrq_event*) rcv_ev))
-      return ret;
-    
-    /* run handler */
-    if (ips_am_run_handler(&token, rcv_ev))
-      ret = IPS_RECVHDRQ_BREAK;
 
-    /* Look if the handler replied, if it didn't, ack the request */    
-    if ((p_hdr->flags & IPS_SEND_FLAG_ACK_REQ)  ||
-	(flow->flags & IPS_FLOW_FLAG_GEN_BECN))
-      ips_proto_send_ack((struct ips_recvhdrq *) rcv_ev->recvq, flow);
+    if (ips_proto_is_expected_or_nak((struct ips_recvhdrq_event*) rcv_ev)) {
+	/* run handler */
+	if (ips_am_run_handler(&token, rcv_ev))
+	    ret = IPS_RECVHDRQ_BREAK;
 
+	/* Look if the handler replied, if it didn't, ack the request */    
+	if ((p_hdr->flags & IPS_SEND_FLAG_ACK_REQ)  ||
+			(flow->flags & IPS_FLOW_FLAG_GEN_BECN))
+	    ips_proto_send_ack((struct ips_recvhdrq *) rcv_ev->recvq, flow);
+    }
+
+    ips_proto_process_ack(rcv_ev);
     return ret;
 }

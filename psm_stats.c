@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -43,8 +44,6 @@ struct psmi_stats_type {
     uint32_t statstype;
     void    *context;
 };
-
-uint32_t psmi_stats_mask = 0;
 
 static STAILQ_HEAD(, psmi_stats_type) psmi_stats = 
 	    STAILQ_HEAD_INITIALIZER(psmi_stats);
@@ -307,7 +306,7 @@ void *psmi_stats_register(struct mpspawn_stats_init_args *args)
     if (args->stats_types == NULL)
 	return NULL;
 
-    psmi_stats_mask = statsmask = stats_parse_enabled_mask(args->stats_types);
+    statsmask = stats_parse_enabled_mask(args->stats_types);
 
     /* MQ (MPI-level) statistics */
     if (statsmask & PSMI_STATSTYPE_MQ)

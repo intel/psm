@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -37,7 +38,7 @@
 #include "psm_am_internal.h"
 
 psm_error_t
-psmi_amsh_am_short_request(ptl_t *ptl, psm_epaddr_t epaddr,
+psmi_amsh_am_short_request(psm_epaddr_t epaddr,
 			   psm_handler_t handler, psm_amarg_t *args, int nargs,
 			   void *src, size_t len, int flags,
 			   psm_am_completion_fn_t completion_fn,
@@ -58,7 +59,8 @@ psmi_amsh_am_short_request(ptl_t *ptl, psm_epaddr_t epaddr,
   req_args[0].u32w0 = (uint32_t) handler;
   psmi_mq_mtucpy((void*) &req_args[1], (const void*) args, 
 		 (nargs * sizeof(psm_amarg_t)));
-  psmi_amsh_short_request(ptl, epaddr, am_handler_hidx, req_args, nargs + 1, 
+  psmi_amsh_short_request(epaddr->ptl, epaddr, am_handler_hidx,
+			req_args, nargs + 1, 
 			  src, len, 0);
   
   if (completion_fn)

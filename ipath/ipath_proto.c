@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -72,23 +73,6 @@ extern void *mmap64(void *, size_t, int, int, int, __off64_t);
 // overall code shorter and easier to debug.
 static void ipath_setaffinity(int) __attribute__ ((noinline));
 static void ipath_touch_mmap(void *, size_t) __attribute__ ((noinline));
-
-// location to which InfiniPath writes the rcvhdrtail
-// register whenever it changes, so that no chip registers are read in
-// the performance path. 
-volatile __le32 *__ipath_rcvtail;
-
-volatile __le32 *__ipath_rcvhdrhead; // address where ur_rcvhdrhead is written
-volatile __le32 *__ipath_rcvegrhead; // address where ur_rcvegrindexhead is written
-static volatile __le32 *__ipath_rcvegrtail; // address where ur_rcvegrindextail is read
-volatile __le32 *__ipath_rcvtidflow; // address where ur_rcvtidflow is written
-volatile __le32 *__ipath_tidflow_wmb; // Serialize writes to tidflow QLE73XX
-static uint32_t __ipath_tidegrcnt;  // number of eager buffers
-
-volatile __u64 *__ipath_spi_status; // save away spi_status for use in ipath_check_unit_status()
-
-static int __ipath_lastfd = -1; // for diags faked lid
-static int __ipath_pg_sz = 0;
 
 int __ipath_malloc_no_mmap = 0; // keep track whether we disabled mmap in malloc
 
@@ -170,6 +154,7 @@ struct _ipath_ctrl *ipath_userinit(int fd, struct ipath_user_info *u,
     uintptr_t pg_mask;
     __u64 pioavailaddr;
     uint64_t uregbase;
+    int __ipath_pg_sz;
     
     /* First get the page size */
     __ipath_pg_sz = sysconf(_SC_PAGESIZE);
@@ -186,8 +171,6 @@ struct _ipath_ctrl *ipath_userinit(int fd, struct ipath_user_info *u,
         _IPATH_INFO("assign_context command failed: %s\n", strerror(errno));
         goto err;
     }
-
-    __ipath_lastfd = fd;  // for diags faked lid
 
     ipath_setaffinity(fd); // prior to memory allocation in driver, etc.
 
@@ -305,26 +288,24 @@ struct _ipath_ctrl *ipath_userinit(int fd, struct ipath_user_info *u,
      * Set up addresses for optimized register writeback routines.
      * This is for the real onchip registers, shared context or not
      */
-    __ipath_rcvhdrhead = (uint32_t*)&tmp64[ur_rcvhdrhead];
-    __ipath_rcvegrhead = (uint32_t*)&tmp64[ur_rcvegrindexhead];
-    __ipath_rcvegrtail = (uint32_t*)&tmp64[ur_rcvegrindextail];
+    spctrl->__ipath_rcvhdrhead = (uint32_t*)&tmp64[ur_rcvhdrhead];
+    spctrl->__ipath_rcvegrhead = (uint32_t*)&tmp64[ur_rcvegrindexhead];
+    spctrl->__ipath_rcvegrtail = (uint32_t*)&tmp64[ur_rcvegrindextail];
     
     if (!(b->spi_runtime_flags & IPATH_RUNTIME_HDRSUPP)) {
-      static __le32 regs[INFINIPATH_TF_NFLOWS << 1];
-      static __le32 tidflow_wmb_location;
       _IPATH_DBG("HdrSupp not available. Using virt tidflow table.\n");
-      __ipath_rcvtidflow = regs;
-      __ipath_tidflow_wmb = &tidflow_wmb_location;
+      spctrl->__ipath_rcvtidflow = spctrl->regs;
+      spctrl->__ipath_tidflow_wmb = &spctrl->tidflow_wmb_location;
     }
     else {
-      __ipath_rcvtidflow = (uint32_t*)&tmp64[ur_rcvtidflow];
-      __ipath_tidflow_wmb = (__le32*)__ipath_rcvegrtail;
+      spctrl->__ipath_rcvtidflow = (uint32_t*)&tmp64[ur_rcvtidflow];
+      spctrl->__ipath_tidflow_wmb = (__le32*)spctrl->__ipath_rcvegrtail;
     }
     
     /* map the receive tidflow table in QLE73XX */    
     _IPATH_DBG("rcvtidfflow=%p offset=0x%lx\n", 
-	       __ipath_rcvtidflow,
-	       (long) ((uintptr_t) __ipath_rcvtidflow - (uintptr_t) tmp64));
+	spctrl->__ipath_rcvtidflow,
+	(long) ((uintptr_t) spctrl->__ipath_rcvtidflow - (uintptr_t) tmp64));
     	
     {   char *maxpio; uint32_t numpio;
 	maxpio = getenv("IPATH_MAXPIO");
@@ -370,8 +351,7 @@ struct _ipath_ctrl *ipath_userinit(int fd, struct ipath_user_info *u,
 	}
     }
     else{
-      static uint64_t sendbuf_status = 0;
-      b->spi_sendbuf_status = (uint64_t)(uintptr_t) &sendbuf_status;
+      b->spi_sendbuf_status = (uint64_t)(uintptr_t) &spctrl->sendbuf_status;
     }
 
     /*
@@ -395,19 +375,25 @@ struct _ipath_ctrl *ipath_userinit(int fd, struct ipath_user_info *u,
 	b->spi_rcvhdr_base = (uintptr_t)tmp; // set to mapped address
     }
 
-    if (b->spi_runtime_flags & IPATH_RUNTIME_NODMA_RTAIL)
-      ; /* Don't mmap tail pointer if not using it. */
+    if (b->spi_runtime_flags & IPATH_RUNTIME_NODMA_RTAIL) {
+        /* Don't mmap tail pointer if not using it. */
+	/* make tail address for false-eager-full recovery, CQ, Jul 15, 2013 */
+	spctrl->__ipath_rcvtail = (volatile uint32_t*)
+	    &spctrl->spc_dev.spd_uregbase[ur_rcvhdrtail * 8];
+	_IPATH_MMDBG("mmap rcvhdrq tail %p\n", spctrl->__ipath_rcvtail);
+	b->spi_rcvhdr_tailaddr = (uint64_t) (uintptr_t)spctrl->__ipath_rcvtail;
+    }
     else if ((b->spi_rcvhdr_tailaddr & pg_mask) == (uregbase & pg_mask)) {
 	uintptr_t s;
 	s = b->spi_rcvhdr_tailaddr - (b->spi_rcvhdr_tailaddr & pg_mask);
 	b->spi_rcvhdr_tailaddr = b->spi_uregbase + s;
-	__ipath_rcvtail = (volatile uint32_t*)(uintptr_t)b->spi_rcvhdr_tailaddr;
+	spctrl->__ipath_rcvtail = (volatile uint32_t*)(uintptr_t)b->spi_rcvhdr_tailaddr;
     }
     else if (!b->spi_rcvhdr_tailaddr) {
 	/* If tailaddr is NULL, use the ureg page (for context sharing) */
-	__ipath_rcvtail = (volatile uint32_t*)
+	spctrl->__ipath_rcvtail = (volatile uint32_t*)
 	    &spctrl->spc_dev.spd_uregbase[ur_rcvhdrtail * 8];
-	_IPATH_MMDBG("mmap rcvhdrq tail %p\n", __ipath_rcvtail);
+	_IPATH_MMDBG("mmap rcvhdrq tail %p\n", spctrl->__ipath_rcvtail);
     }
     else if((tmp=mmap64(0, __ipath_pg_sz, PROT_READ, MAP_SHARED | MAP_LOCKED,
 	    fd, (__off64_t)b->spi_rcvhdr_tailaddr)) == MAP_FAILED) {
@@ -416,14 +402,14 @@ struct _ipath_ctrl *ipath_userinit(int fd, struct ipath_user_info *u,
     }
     else {
 	ipath_touch_mmap(tmp, __ipath_pg_sz);
-	__ipath_rcvtail = (volatile uint32_t*)tmp; // for use in protocol code
+	spctrl->__ipath_rcvtail = (volatile uint32_t*)tmp; // for use in protocol code
 	_IPATH_MMDBG("mmap rcvhdrq tail from kernel %llx to %p\n",
 	    (unsigned long long)b->spi_rcvhdr_tailaddr, tmp);
 	/* Update baseinfo with new value of tail address */
 	b->spi_rcvhdr_tailaddr = (uint64_t) (uintptr_t) tmp;
     }
 
-    __ipath_tidegrcnt = b->spi_tidegrcnt;
+    spctrl->__ipath_tidegrcnt = b->spi_tidegrcnt;
     if(!b->spi_rcv_egrbuftotlen) {
 	_IPATH_ERROR("new protocol against older driver, fall back to old\n");
 	b->spi_rcv_egrbuftotlen = b->spi_rcv_egrbufsize*b->spi_tidegrcnt;
@@ -471,7 +457,7 @@ struct _ipath_ctrl *ipath_userinit(int fd, struct ipath_user_info *u,
 	uintptr_t s;
 	s = b->spi_status - pioavailaddr;
 	b->spi_status = (uintptr_t)(tmp + s);
-	__ipath_spi_status = (__u64 volatile*)(uintptr_t)b->spi_status;
+	spctrl->__ipath_spi_status = (__u64 volatile*)(uintptr_t)b->spi_status;
     }
     else if((tmp=mmap64(0, __ipath_pg_sz, PROT_READ, MAP_SHARED | MAP_LOCKED,
 		 fd, (__off64_t)(b->spi_status & pg_mask))) == MAP_FAILED) {
@@ -486,10 +472,10 @@ struct _ipath_ctrl *ipath_userinit(int fd, struct ipath_user_info *u,
 	    (long long)b->spi_status, tmp);
 	s = b->spi_status - (b->spi_status & pg_mask);
 	b->spi_status = (uintptr_t)(tmp + s);
-	__ipath_spi_status = (__u64 volatile*)(uintptr_t)b->spi_status;
+	spctrl->__ipath_spi_status = (__u64 volatile*)(uintptr_t)b->spi_status;
     }
     _IPATH_DBG("chipstatus=0x%llx\n",
-	       (unsigned long long)*__ipath_spi_status);
+	       (unsigned long long)*spctrl->__ipath_spi_status);
 
     if(u->spu_subcontext_cnt) {
 	unsigned num_subcontexts = u->spu_subcontext_cnt;
@@ -639,6 +625,9 @@ int ipath_get_port_lid(uint16_t unit, uint16_t port)
     else {
         ret = val;
 
+// disable this feature since we don't have a way to provide
+// file descriptor in multiple context case.
+#if 0
 	if(getenv("IPATH_DIAG_LID_LOOP")) {
 		// provides diagnostic ability to run MPI, etc. even
 		// on loopback, by claiming a different LID for each context
@@ -658,6 +647,7 @@ int ipath_get_port_lid(uint16_t unit, uint16_t port)
 			ret += info.context;
 		}
 	}
+#endif
     }
 
     return ret;
@@ -803,6 +793,10 @@ static void ipath_touch_mmap(void *m, size_t bytes)
 {
     volatile uint32_t *b = (volatile uint32_t *)m, c;
     size_t i;  // m is always page aligned, so pgcnt exact
+    int __ipath_pg_sz;
+    
+    /* First get the page size */
+    __ipath_pg_sz = sysconf(_SC_PAGESIZE);
 
     _IPATH_VDBG("Touch %lu mmap'ed pages starting at %p\n", (unsigned long) bytes/__ipath_pg_sz, m);
     bytes /= sizeof c;
@@ -838,15 +832,15 @@ int ipath_set_pkey(struct _ipath_ctrl *ctrl, uint16_t pkey)
 // that eager head wasn't adavanced.
 //
 
-void ipath_flush_egr_bufs(void)
+void ipath_flush_egr_bufs(struct _ipath_ctrl *ctrl)
 {
-    uint32_t head = __le32_to_cpu(*__ipath_rcvegrhead);
-    uint32_t tail = __le32_to_cpu(*__ipath_rcvegrtail);
+    uint32_t head = __le32_to_cpu(*ctrl->__ipath_rcvegrhead);
+    uint32_t tail = __le32_to_cpu(*ctrl->__ipath_rcvegrtail);
 
-    if((head%__ipath_tidegrcnt) == ((tail+1)%__ipath_tidegrcnt)) {
+    if((head%ctrl->__ipath_tidegrcnt) == ((tail+1)%ctrl->__ipath_tidegrcnt)) {
         _IPATH_DBG("eager array full after overflow, flushing (head %llx, tail %llx\n",
             (long long)head, (long long)tail);
-        *__ipath_rcvegrhead = __cpu_to_le32(tail);
+        *ctrl->__ipath_rcvegrhead = __cpu_to_le32(tail);
     }
 }
 
@@ -1077,42 +1071,41 @@ int ipath_hideous_ioctl_emulator(int unit, int reqtype, struct ipath_eeprom_req 
 // as well as older unit-only.  For now, we don't have the port interface
 // defined, so just check port 0 qword for spi_status
 // Hard-code spmsg as 3rd qword until we have IB port
-int ipath_check_unit_status(void)
+int ipath_check_unit_status(struct _ipath_ctrl *ctrl)
 {
     char *spmsg = NULL, *msg = NULL, buf[80];
     int rc = IPS_RC_OK;
-    static int lasterr;
     _Pragma_unlikely
 
-    if(!__ipath_spi_status)
+    if(!ctrl->__ipath_spi_status)
         return rc;
 
-    if( !(__ipath_spi_status[0] & IPATH_STATUS_CHIP_PRESENT) ||
-        (__ipath_spi_status[0] & (IPATH_STATUS_HWERROR))) {
+    if( !(ctrl->__ipath_spi_status[0] & IPATH_STATUS_CHIP_PRESENT) ||
+        (ctrl->__ipath_spi_status[0] & (IPATH_STATUS_HWERROR))) {
         rc = IPS_RC_DEVICE_ERROR;
-        if(lasterr != rc) { // only report once
-            spmsg = (char*)&__ipath_spi_status[2];  // string for hardware error, if any
+        if(ctrl->lasterr != rc) { // only report once
+            spmsg = (char*)&ctrl->__ipath_spi_status[2];  // string for hardware error, if any
             if(!*spmsg) {
                 msg = buf;
                 snprintf(buf, sizeof buf, "%s\n",
-                    (__ipath_spi_status[0] & IPATH_STATUS_HWERROR) ?
+                    (ctrl->__ipath_spi_status[0] & IPATH_STATUS_HWERROR) ?
                     "Hardware error" : "Hardware not found");
             }
         }
     }
-    else if (!(__ipath_spi_status[0] & IPATH_STATUS_IB_CONF) && 
-	    !(__ipath_spi_status[1] & IPATH_STATUS_IB_CONF)) {
+    else if (!(ctrl->__ipath_spi_status[0] & IPATH_STATUS_IB_CONF) && 
+	    !(ctrl->__ipath_spi_status[1] & IPATH_STATUS_IB_CONF)) {
         rc = IPS_RC_NETWORK_DOWN;
-        if(lasterr != rc) // only report once
-            spmsg = (char*)&__ipath_spi_status[2];  // string for hardware error, if any
+        if(ctrl->lasterr != rc) // only report once
+            spmsg = (char*)&ctrl->__ipath_spi_status[2];  // string for hardware error, if any
     }
-    else if (!(__ipath_spi_status[0] & IPATH_STATUS_IB_READY) &&
-	    !(__ipath_spi_status[1] & IPATH_STATUS_IB_READY)) {
+    else if (!(ctrl->__ipath_spi_status[0] & IPATH_STATUS_IB_READY) &&
+	    !(ctrl->__ipath_spi_status[1] & IPATH_STATUS_IB_READY)) {
         // if only this error, probably cable pulled, switch rebooted, etc.
         // report it the first time, and then treat it same as BUSY, since
         // it could be recovered from within the quiescence period
         rc = IPS_RC_BUSY;
-        if(lasterr != rc) // only report once
+        if(ctrl->lasterr != rc) // only report once
             msg = "IB Link is down";
     }
     if(spmsg && *spmsg) {
@@ -1124,10 +1117,10 @@ int ipath_check_unit_status(void)
     }
     else if(msg)
         _IPATH_DBG("%s\n", msg);
-    if(lasterr && rc==IPS_RC_OK)
-        lasterr = 0; // cleared up, report if it happens again
+    if(ctrl->lasterr && rc==IPS_RC_OK)
+        ctrl->lasterr = 0; // cleared up, report if it happens again
     else if(rc != IPS_RC_OK)
-        lasterr = rc;
+        ctrl->lasterr = rc;
     return rc;
 }
 

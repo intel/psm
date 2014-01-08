@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -734,12 +735,105 @@ ips_ptl_connect(ptl_t *ptl, int numep, const psm_epid_t *array_of_epid,
 		const int *array_of_epid_mask, psm_error_t *array_of_errors, 
 		psm_epaddr_t *array_of_epaddr, uint64_t timeout_in)
 {
-    psm_error_t err;
+    psm_error_t		err;
+    psm_ep_t		ep;
+    psm_epid_t		*epid_array = NULL;
+    psm_error_t		*error_array = NULL;
+    psm_epaddr_t	*epaddr_array = NULL;
+    int			*mask_array = NULL;
+    int			i, count;
 
     PSMI_PLOCK_ASSERT();
     err = ips_proto_connect(&ptl->proto, numep, array_of_epid, 
 			     array_of_epid_mask, array_of_errors, 
 			     array_of_epaddr, timeout_in);
+    if (err) return err;
+
+    psmi_assert_always(ptl->ep->mctxt_master == ptl->ep);
+    if (ptl->ep->mctxt_next == ptl->ep) return err;
+
+    /* make the additional mutil-context connections. */
+    epid_array = (psm_epid_t *)
+	psmi_malloc(ptl->ep, UNDEFINED, sizeof(psm_epid_t)*numep);
+    mask_array = (int *)
+	psmi_malloc(ptl->ep, UNDEFINED, sizeof(int)*numep);
+    error_array = (psm_error_t *)
+	psmi_malloc(ptl->ep, UNDEFINED, sizeof(psm_error_t)*numep);
+    epaddr_array = (psm_epaddr_t *)
+	psmi_malloc(ptl->ep, UNDEFINED, sizeof(psm_epaddr_t)*numep);
+    if (!epid_array || !mask_array || !error_array || !epaddr_array) {
+	goto fail;
+    }
+
+    count = 0;
+    ep = ptl->ep->mctxt_next;
+    while (ep != ep->mctxt_master) {
+
+	/* Setup the mask array and epid array. */
+	for (i = 0; i < numep; i++) {
+	    if (array_of_epid_mask[i]
+	    && array_of_errors[i] == PSM_OK
+	    && count < array_of_epaddr[i]->mctxt_epcount) {
+		if (ep->gid_hi != array_of_epaddr[i]->mctxt_gidhi[count]) {
+		    mask_array[i] = 0;
+		    _IPATH_INFO("Subnet ID mismatch, ignore...\n");
+		} else {
+		    mask_array[i] = 1;
+		    epid_array[i] = array_of_epaddr[i]->mctxt_epid[count];
+		}
+	    } else {
+		mask_array[i] = 0;
+	    }
+	}
+
+	/* Make the real protocol connections. */
+	err = ips_proto_connect(&ep->ptl_ips.ptl->proto, numep, epid_array, 
+			     mask_array, error_array, 
+			     epaddr_array, timeout_in);
+	if (err) goto fail;
+
+	/* Make the epaddr linklist for this peer. */
+	for (i = 0; i < numep; i++) {
+	    if (!mask_array[i]) continue;
+
+	    /* In rare case, when the peer exits psm_ep_connect()
+ 	     * and sends a message, it is received by this epaddr,
+ 	     * because the epaddr->mctxt_master is still itself (linked
+ 	     * and changed by below macro), epaddr->mctxt_recv_seqnum
+ 	     * is increased, not the master's mctxt_recv_seqnum.
+ 	     * when this happens, we need to apply this mctxt_recv_seqnum
+ 	     * to master's mctxt_recv_seqnum, otherwise, the message
+ 	     * sequence number doesnot match master's mctxt_recv_seqnum,
+	     * and causes code hanging.
+	     * This case only happens in the last rail of multi-rail.
+ 	     */
+	    if (epaddr_array[i]->mctxt_recv_seqnum) {
+		array_of_epaddr[i]->mctxt_recv_seqnum +=
+			epaddr_array[i]->mctxt_recv_seqnum;
+		epaddr_array[i]->mctxt_recv_seqnum = 0;
+	    }
+
+	    PSM_MCTXT_APPEND(array_of_epaddr[i], epaddr_array[i]);
+
+	    /* randomize the rail to start traffic */
+	    if ((random()%(count+2)) == 0) {
+		array_of_epaddr[i]->mctxt_current = epaddr_array[i];
+	    }
+
+	    /* Set the # slave connections so far */
+	    array_of_epaddr[i]->mctxt_nsconn++;
+	}
+
+	count++;
+	ep = ep->mctxt_next;
+    }
+
+fail:
+    if (epid_array) psmi_free(epid_array);
+    if (mask_array) psmi_free(mask_array);
+    if (error_array) psmi_free(error_array);
+    if (epaddr_array) psmi_free(epaddr_array);
+
     return err;
 }
 

@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -33,7 +34,8 @@
 
 #include "ips_tidflow.h"
 
-psm_error_t ips_tf_init(struct ips_tfctrl *tfctrl, 
+psm_error_t ips_tf_init(const psmi_context_t *context,
+			struct ips_tfctrl *tfctrl, 
 			int start_flowidx, 
 			int end_flowidx,
 			ips_tf_avail_cb_fn_t cb,
@@ -51,6 +53,7 @@ psm_error_t ips_tf_init(struct ips_tfctrl *tfctrl,
 
   psmi_assert_always(num_flows > 0);
   
+  tfctrl->context	  = context;
   tfctrl->tf_start_idx    = start_flowidx;
   tfctrl->tf_end_idx      = end_flowidx;
   tfctrl->tf_num_max      = num_flows;
@@ -74,7 +77,7 @@ psm_error_t ips_tf_init(struct ips_tfctrl *tfctrl,
      * QLE73XX and tidflow_set_entry enables the header suppression engine while
      * reset does not.
      */
-    ipath_tidflow_reset(tf_idx);
+    ipath_tidflow_reset(context->ctrl, tf_idx);
   }
     
 #if TF_ADD
@@ -144,7 +147,8 @@ psm_error_t ips_tf_deallocate(struct ips_tfctrl *tfctrl, uint32_t tf_idx)
   tf->state = TF_STATE_DEALLOCATED;
   
   /* Mark invalid generation for flow (stale packets will be dropped) */
-  ipath_tidflow_set_entry(tf_idx, IPS_TF_INVALID_GENERATION, 0);
+  ipath_tidflow_set_entry(tfctrl->context->ctrl,
+		tf_idx, IPS_TF_INVALID_GENERATION, 0);
   
   SLIST_NEXT(tf, next) = NULL;
   SLIST_INSERT_HEAD(&tfctrl->tf_avail, tf, next);

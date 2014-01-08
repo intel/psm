@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -45,6 +46,7 @@
 #define BYTE2WORD_SHIFT 2
 #define LOWER_24_BITS 0xFFFFFF
 #define LOWER_16_BITS 0xFFFF
+#define LOWER_8_BITS 0xFF
 #define MAX_VL_SUPPORTED 8
 #define PSM_CRC_SIZE_IN_BYTES 8 /* Change in ipath_user.h as well */
 #define PSM_CACHE_LINE_BYTES 64
@@ -61,8 +63,6 @@
 #define IPS_PROTO_ERRCHK_MS_MAX_DEFAULT	32    /* in millisecs */
 #define IPS_PROTO_ERRCHK_FACTOR_DEFAULT 2
 #define PSM_TID_TIMEOUT_DEFAULT "8:32:2" /* update from above params */
-
-#define ADVANCE_SEQ_NUM(seq_num) seq_num = (seq_num + 1) & LOWER_24_BITS
 
 #define IPS_HDR_TID(p_hdr)				    \
 	((__le32_to_cpu((p_hdr)->iph.ver_context_tid_offset) >> \

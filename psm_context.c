@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -41,9 +42,10 @@
 static uint32_t psmi_get_num_contexts(int unit_id);
 static int	psmi_sharedcontext_params(int *nranks, int *rankid);
 static int      psmi_get_hca_selection_algorithm(void);
-static psm_error_t psmi_init_userinfo_params(int unit_id, int port,
-		    psm_uuid_t const unique_job_key,
-		    struct ipath_user_info *user_info);
+static psm_error_t psmi_init_userinfo_params(psm_ep_t ep, 
+		int unit_id, int port,
+		psm_uuid_t const unique_job_key,
+		struct ipath_user_info *user_info);
 
 psm_error_t
 psmi_context_interrupt_set(psmi_context_t *context, int enable)
@@ -156,7 +158,7 @@ psmi_context_open(const psm_ep_t ep, long unit_id, long port,
     char dev_name[MAXPATHLEN];
     psm_error_t err = PSM_OK;
     uint32_t driver_verno, hca_type;
-    extern volatile __u64 *__ipath_spi_status;
+    int retry_delay = 0;
 
     /*
      * If shared contexts are enabled, try our best to schedule processes
@@ -190,7 +192,7 @@ psmi_context_open(const psm_ep_t ep, long unit_id, long port,
         _IPATH_INFO("Failed to set close on exec for device: %s\n",
             strerror(errno));
 
-    if ((err = psmi_init_userinfo_params((int) unit_id, (int)port, job_key,
+    if ((err = psmi_init_userinfo_params(ep, (int) unit_id, (int)port, job_key,
 				&context->user_info))) 
 	goto bail;
 
@@ -207,7 +209,6 @@ retry_open:
 	goto fail;
       
       if ((open_timeout == -1L) || (errno == EBUSY) || (errno == ENODEV)) {
-	    static int retry_delay = 0;
 	    if(!retry_delay) {
 		_IPATH_PRDBG("retrying open: %s, network down\n", dev_name);
 		retry_delay = 1;
@@ -280,7 +281,8 @@ retry_open:
     /* We are overloading this runtime flags for PSM options so make sure
      * something can never go horribly bad */
     psmi_assert_always(context->runtime_flags < _PSMI_RUNTIME_LAST);
-    context->spi_status = (volatile uint64_t *) __ipath_spi_status;
+    context->spi_status = (volatile uint64_t *)
+			context->ctrl->__ipath_spi_status;
 
     {
 	char buf[192];
@@ -430,16 +432,19 @@ ret:
  */
 static
 psm_error_t
-psmi_init_userinfo_params(int unit_id, int port,
+psmi_init_userinfo_params(psm_ep_t ep, int unit_id, int port,
 		psm_uuid_t const unique_job_key,
 		struct ipath_user_info *user_info)
 {
-    int shcontexts_enabled, rankid, nranks;
+    /* static variables, shared among rails */
+    static int shcontexts_enabled = -1, rankid, nranks;
+
     int avail_contexts = 0, max_contexts, ask_contexts, ranks_per_context = 0;
     uint32_t job_key;
     uint16_t *jkp;
     psm_error_t err = PSM_OK;
     union psmi_envvar_val env_maxctxt, env_ranks_per_context;
+    static int subcontext_id_start = 0;
 
     memset(user_info, 0, sizeof *user_info);
     user_info->spu_userversion = IPATH_USER_SWVERSION;
@@ -447,7 +452,9 @@ psmi_init_userinfo_params(int unit_id, int port,
     user_info->spu_subcontext_cnt = 0;
     user_info->spu_port_alg = psmi_get_hca_selection_algorithm();
 
-    shcontexts_enabled = psmi_sharedcontext_params(&nranks, &rankid);
+    if (shcontexts_enabled == -1) {
+        shcontexts_enabled = psmi_sharedcontext_params(&nranks, &rankid);
+    }
 
     if (!shcontexts_enabled)
 	return err;
@@ -460,7 +467,10 @@ psmi_init_userinfo_params(int unit_id, int port,
      * same time */
     job_key =  ((jkp[2] ^ jkp[3]) >> 8) | ((jkp[0] ^ jkp[1]) << 8);
     job_key ^= ((jkp[6] ^ jkp[7]) >> 8) | ((jkp[4] ^ jkp[5]) << 8);
-    job_key &= ~0xff; /* just to make more readable */
+    /* comment out, because it has more chance to generate the same job_key for
+     * two unrelated jobs that would start at the same time, and causes context
+     * allocation failure */
+    //job_key &= ~0xff; /* just to make more readable */
 
     if (avail_contexts == 0) {
 	err = psmi_handle_error(NULL, PSM_EP_NO_DEVICE,
@@ -494,7 +504,7 @@ psmi_init_userinfo_params(int unit_id, int port,
      * shm segment to obtain a unique shmidx.
      */
     if (rankid == -1) {
-	if ((err = psmi_shm_attach(unique_job_key, &rankid)))
+	if ((err = psmi_shm_attach(ep, &rankid)))
 	    goto fail;
     }
 
@@ -533,7 +543,14 @@ psmi_init_userinfo_params(int unit_id, int port,
     user_info->spu_port = port; /* requested IB port if > 0 */
 
     /* "unique" id based on job key */
-    user_info->spu_subcontext_id = job_key + rankid % ask_contexts;
+    user_info->spu_subcontext_id = subcontext_id_start +
+			job_key + rankid % ask_contexts;
+    /* this is for multi-rail, when we setup a new rail,
+     * we can not use the same subcontext ID as the previous
+     * rail, otherwise, the driver will match previous rail
+     * and fail.
+     */
+    subcontext_id_start += ask_contexts;
 
     /* Need to compute with how many *other* peers we will be sharing the
      * context */
