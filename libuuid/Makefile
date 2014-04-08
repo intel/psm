@@ -44,3 +44,6 @@ all: ${${TARGLIB}-objs}
 
 clean:
 	rm -f *.o
+
+install:
+	@echo "Nothing to do for install."
