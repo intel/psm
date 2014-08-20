@@ -84,7 +84,6 @@ void ips_proto_show_header(struct ips_message_header *p_hdr, char *msg)
 {
     uint32_t tid;
     psm_protocol_type_t protocol;
-    ptl_epaddr_flow_t flowid __unused__;
     psmi_seqnum_t ack_seq_num;
         
     printf("\nHeader decoding %s\n",msg?msg:"");
@@ -118,7 +117,7 @@ void ips_proto_show_header(struct ips_message_header *p_hdr, char *msg)
     printf("sub-opcode %x\n", p_hdr->sub_opcode);
     
     ack_seq_num.psn = p_hdr->ack_seq_num;
-    IPS_FLOWID_UNPACK(p_hdr->flowid, protocol, flowid);
+    protocol = IPS_FLOWID_GET_PROTO(p_hdr->flowid);
     if (protocol == PSM_PROTOCOL_GO_BACK_N)
       printf("ack_seq_num %x\n", ack_seq_num.psn);
     else

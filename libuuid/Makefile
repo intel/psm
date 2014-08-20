@@ -30,7 +30,6 @@
 # SOFTWARE.
 #
 
-top_srcdir := ..
 include $(top_srcdir)/buildflags.mak
 CFLAGS += -DPSM_UUID=1 -Wno-unused-function
 INCLUDES += -I$(top_srcdir) -I$(top_srcidr)/libuuid
@@ -44,6 +43,3 @@ all: ${${TARGLIB}-objs}
 
 clean:
 	rm -f *.o
-
-install:
-	@echo "Nothing to do for install."

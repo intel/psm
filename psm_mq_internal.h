@@ -111,16 +111,17 @@ struct psm_mq {
 #define MQ_STATE_UNEXP_RV	4
 #define MQ_STATE_FREE		5
 
-#define MQ_MSG_TINY	1
-#define MQ_MSG_SHORT	2
-#define MQ_MSG_LONG	3
-#define MQ_MSG_RTS	4
-#define MQ_MSG_RTS_EGR	5
-#define MQ_MSG_RTS_WAIT	6
-#define MQ_MSG_DATA	9
-#define MQ_MSG_CTS_EGR	10
-#define MQ_MSG_DATA_REQ	11
-#define MQ_MSG_DATA_BLK	12
+#define MQ_MSG_TINY		1
+#define MQ_MSG_SHORT		2
+#define MQ_MSG_LONG		3
+#define MQ_MSG_RTS		4
+#define MQ_MSG_RTS_EGR		5
+#define MQ_MSG_RTS_WAIT		6
+#define MQ_MSG_DATA		9
+#define MQ_MSG_DATA_BLK		10
+#define MQ_MSG_DATA_REQ		11
+#define MQ_MSG_DATA_REQ_BLK	12
+#define MQ_MSG_CTS_EGR		13
 
 #define MQ_MSG_USER_FIRST 64
 

@@ -51,7 +51,11 @@ static __inline__ uint64_t get_cycles(void)
 
 static __inline__ void ips_mb()
 {
+#ifdef __MIC__
+    asm volatile("lock; addl $0,0(%%rsp)" ::: "memory");
+#else
     asm volatile("mfence" : : : "memory");
+#endif
 }
 
 /* gcc-3.4 has a bug with this function body at -O0 */
@@ -62,22 +66,38 @@ __inline__
 #endif
 void ips_rmb()
 {
+#ifdef __MIC__
+    asm volatile("lock; addl $0,0(%%rsp)" ::: "memory");
+#else
     asm volatile("" : : : "memory");
+#endif
 }
 
 static __inline__ void ips_wmb()
 {
+#ifdef __MIC__
+    asm volatile("lock; addl $0,0(%%rsp)" ::: "memory");
+#else
     asm volatile("sfence" : : : "memory");
+#endif
 }
 
 static __inline__ void ips_sync_writes()
 {
+#ifdef __MIC__
+    asm volatile("lock; addl $0,0(%%rsp)" ::: "memory");
+#else
     asm volatile("sfence" : : : "memory");
+#endif
 }
 
 static __inline__ void ips_sync_reads()
 {
+#ifdef __MIC__
+    asm volatile("lock; addl $0,0(%%rsp)" ::: "memory");
+#else
     asm volatile("lfence" : : : "memory");
+#endif
 }
 
 static __inline__ uint32_t ips_cmpxchg(volatile uint32_t *ptr,

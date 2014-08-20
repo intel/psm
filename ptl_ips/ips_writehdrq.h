@@ -1,4 +1,5 @@
 /*
+ * Copyright (c) 2013. Intel Corporation. All rights reserved.
  * Copyright (c) 2006-2012. QLogic Corporation. All rights reserved.
  * Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  *
@@ -37,6 +38,7 @@
 #include "psm_user.h"
 #include "ips_recvhdrq.h"
 #include "ips_recvq.h"
+#include "psm_mq_internal.h"
 
 /*
  * Structure containing state for writehdrq writing. This is logically
@@ -161,7 +163,7 @@ ips_writehdrq_append(struct ips_writehdrq *writeq,
 	    next_write_egr_tail = 0;
 	if (next_write_egr_tail == ips_recvq_head_get(&writeq->egrq)) {
             /* Copy the header to the subcontext's header queue */
-            memcpy(write_hdr, rcv_hdr, writeq->hdrq_hdr_copysz);
+            psmi_mq_mtucpy(write_hdr, rcv_hdr, writeq->hdrq_hdr_copysz);
 
 	    /* Mark header with ETIDERR (eager overflow) */
 	    ipath_hdrset_err_flags(write_rhf, INFINIPATH_RHF_H_TIDERR);
@@ -179,11 +181,11 @@ ips_writehdrq_append(struct ips_writehdrq *writeq,
                 write_payload = ips_recvq_egr_index_2_ptr(
                                     writeq->egrq_buftable, write_egr_tail);
 
-	        memcpy(write_payload, rcv_payload, rcv_paylen);
+	        psmi_mq_mtucpy(write_payload, rcv_payload, rcv_paylen);
 	    }
 
             /* Copy the header to the subcontext's header queue */
-            memcpy(write_hdr, rcv_hdr, writeq->hdrq_hdr_copysz);
+            psmi_mq_mtucpy(write_hdr, rcv_hdr, writeq->hdrq_hdr_copysz);
 
 	    /* Fix up the header with the subcontext's eager index */
 	    ipath_hdrset_index((uint32_t *) write_rhf, write_egr_tail);
@@ -194,7 +196,7 @@ ips_writehdrq_append(struct ips_writehdrq *writeq,
     }
     else {
         /* Copy the header to the subcontext's header queue */
-        memcpy(write_hdr, rcv_hdr, writeq->hdrq_hdr_copysz);
+        psmi_mq_mtucpy(write_hdr, rcv_hdr, writeq->hdrq_hdr_copysz);
 
 	/* Copy the value of the current egr tail, handles the
 	 * eager-with-no-payload case */

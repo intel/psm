@@ -121,8 +121,6 @@ psmi_err_only(psm_error_t err))
 #define PSMI_CYCLES_TO_SECSF(cycles)			\
 	    ((double) cycles_to_nanosecs(cycles) / 1.0e9)
 
-#define PSMI_UNIT_ID_ANY ((long)-1)
-
 #define PSMI_PAGESIZE       psmi_getpagesize()
 #define PSMI_POWEROFTWO(P)  (((P)&((P)-1)) == 0)
 #define PSMI_ALIGNDOWN(p,P) (((uintptr_t)(p))&~((uintptr_t)((P)-1)))

@@ -106,12 +106,12 @@ am_short_reqrep(struct ips_proto_am *proto_am, ips_scb_t *scb,
 	     * message header, so we have to copy the user's arguments even if
 	     * the payload is marked ASYNC */
 	    uintptr_t bufp = (uintptr_t) scb->payload;
-	    memcpy((void *) bufp, &args[PSM_AM_HDR_QWORDS], 
+	    psmi_mq_mtucpy((void *) bufp, &args[PSM_AM_HDR_QWORDS], 
 		   sizeof(psm_amarg_t) * (nargs - PSM_AM_HDR_QWORDS));
 	    bufp += sizeof(psm_amarg_t) * (nargs - PSM_AM_HDR_QWORDS);
 	    scb->payload_size = sizeof(psm_amarg_t) * (nargs-PSM_AM_HDR_QWORDS);
 	    if (src != NULL && len > 0) {
-		memcpy((void *) bufp, src, len);
+		psmi_mq_mtucpy((void *) bufp, src, len);
 		scb->payload_size += len;
 	    }
 	    scb->payload_size += pad_bytes;
@@ -124,7 +124,7 @@ am_short_reqrep(struct ips_proto_am *proto_am, ips_scb_t *scb,
      * If small enough, try to stuff the message in a header only
      */
     if (len <= (hdr_qwords<<3)) { /* can handle len == 0 */
-	memcpy(&scb->ips_lrh.data[PSM_AM_HDR_QWORDS-hdr_qwords], src, len);
+	psmi_mq_mtucpy(&scb->ips_lrh.data[PSM_AM_HDR_QWORDS-hdr_qwords], src, len);
 	scb->payload_size = 0;
 	scb->ips_lrh.hdr_dlen = len;
 	scb->ips_lrh.amhdr_flags |=  IPS_AMFLAG_ISTINY;
@@ -134,7 +134,7 @@ am_short_reqrep(struct ips_proto_am *proto_am, ips_scb_t *scb,
 	    scb->payload = src;
 	}
 	else { /* May need to re-xmit user data, keep it around */
-	  memcpy(scb->payload, src, len);
+	  psmi_mq_mtucpy(scb->payload, src, len);
 	}
 	scb->payload_size = len + pad_bytes;
 	scb->ips_lrh.hdr_dlen = pad_bytes;
@@ -143,7 +143,7 @@ am_short_reqrep(struct ips_proto_am *proto_am, ips_scb_t *scb,
 send_scb:
     scb->ips_lrh.sub_opcode = sub_opcode;
     flow->fn.xfer.enqueue(flow, scb);
-    (void)flow->fn.xfer.flush(flow, NULL);
+    flow->fn.xfer.flush(flow, NULL);
     return PSM_OK;
 }
 

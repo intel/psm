@@ -86,6 +86,9 @@ psmi_test_epid_table(int numelems)
     ep_alloc = (psm_epaddr_t) psmi_calloc(PSMI_EP_NONE, UNDEFINED, numelems, sizeof(struct psm_epaddr));
     ep_array = (psm_epaddr_t *) psmi_calloc(PSMI_EP_NONE, UNDEFINED, numelems, sizeof(struct psm_epaddr *));
     epid_array = (psm_epid_t *) psmi_calloc(PSMI_EP_NONE, UNDEFINED, numelems, sizeof(psm_epid_t));
+    diags_assert(ep_alloc != NULL);
+    diags_assert(ep_array != NULL);
+    diags_assert(epid_array != NULL);
 
     srand(12345678);
 
@@ -158,12 +161,17 @@ psmi_test_epid_table(int numelems)
 
     /* Only free on success */
     psmi_epid_fini();
+    psmi_free(epid_array);
     psmi_free(ep_array);
-    psmi_free(epaddr);
     psmi_free(ep_alloc);
     DIAGS_RETURN_PASS("");
 
 fail:
+    /* Klocwork scan report memory leak. */
+    psmi_epid_fini();
+    if (epid_array) psmi_free(epid_array);
+    if (ep_array) psmi_free(ep_array);
+    if (ep_alloc) psmi_free(ep_alloc);
     DIAGS_RETURN_FAIL("");
 }
 
@@ -273,6 +281,8 @@ memcpy_check_size (memcpy_fn_t fn, int *p, int *f, size_t n)
     src = psmi_malloc(PSMI_EP_NONE, UNDEFINED, size);
     dst = psmi_malloc(PSMI_EP_NONE, UNDEFINED, size);
     if (src == NULL || dst == NULL) 
+      if (src) psmi_free(src);
+      if (dst) psmi_free(dst);
       return -1;
   }
   else {

@@ -82,12 +82,19 @@ ips_opp_get_path_rec(ips_path_type_t type, struct ips_proto *proto,
     elid.key = psmi_calloc(proto->ep, UNDEFINED, 1, strlen(eplid) + 1);
     opp_path_rec = (ips_opp_path_rec_t*) 
       psmi_calloc(proto->ep, UNDEFINED, 1, sizeof(ips_opp_path_rec_t));
+    if (!elid.key || !opp_path_rec) {
+	if (elid.key) psmi_free(elid.key);
+	if (opp_path_rec) psmi_free(opp_path_rec);
+	err = PSM_NO_MEMORY;
+	goto fail;
+    }
     
     /* Get path record between local LID and remote */
     opp_err = proto->opp_fn.op_path_get_path_by_rec(proto->opp_ctxt, &query,
 					     &opp_path_rec->opp_response);
-    if (opp_err || !elid.key) {
+    if (opp_err) {
       psmi_free(opp_path_rec);
+      psmi_free(elid.key);
       err = PSM_EPID_PATH_RESOLUTION;
       goto fail;
     }
@@ -106,6 +113,8 @@ ips_opp_get_path_rec(ips_path_type_t type, struct ips_proto *proto,
     
     /* Setup CCA parameters for path */
     if (opp_path_rec->ips.epr_sl > 15) {
+        psmi_free(opp_path_rec);
+        psmi_free(elid.key);
 	err = PSM_INTERNAL_ERR;
 	goto fail;
     }
@@ -368,7 +377,9 @@ psm_error_t ips_opp_init(struct ips_proto *proto)
 
   proto->opp_lib = dlopen(DF_OPP_LIBRARY, RTLD_NOW);
   if (!proto->opp_lib) {
-    _IPATH_ERROR("Unable to open OFED Plus Plus library %s. Error: %s\n", DF_OPP_LIBRARY, dlerror());
+    char *err = dlerror();
+    _IPATH_ERROR("Unable to open OFED Plus Plus library %s. Error: %s\n", DF_OPP_LIBRARY,
+		err ? err : "no dlerror()");
     goto fail;
   }
   

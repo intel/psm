@@ -55,6 +55,7 @@ ips_poll_scb(struct ips_proto *proto,
 	((scb = istiny ? 
 	  ips_scbctrl_alloc_tiny(&proto->scbc_egr) :
 	  ips_scbctrl_alloc(&proto->scbc_egr, npkts, len, flags)) != NULL));
+    psmi_assert(scb != NULL);
     return scb;
 }
 
@@ -183,7 +184,7 @@ ips_mq_send_payload(psm_epaddr_t epaddr, psmi_egrid_t egrid,
 		    void *ubuf, uint32_t len, uint32_t offset,
 		    psm_mq_req_t req, uint32_t flags)
 {
-    psm_error_t err = PSM_OK;
+    psm_error_t err;
 
     ips_scb_t *scb;
     uintptr_t buf = (uintptr_t) ubuf;
@@ -205,6 +206,7 @@ ips_mq_send_payload(psm_epaddr_t epaddr, psmi_egrid_t egrid,
 
     if (!(flags & IPS_PROTO_FLAG_MQ_EAGER_SDMA)) goto spio;
 
+    psmi_assert(req != NULL);
     pktlen = len;
     /* The payload size is limited by the pbc.length field which is 16 bits in
      * DWORD, including both message header and payload. This translates to
@@ -215,7 +217,7 @@ ips_mq_send_payload(psm_epaddr_t epaddr, psmi_egrid_t egrid,
 	scb = mq_alloc_pkts(proto, 1, 0, 0);
 	psmi_assert(scb != NULL);
 
-#if 0	//source code backdoor
+#if 0
 	/* turn on to use single frag-size packet */
 	pktlen = min(frag_size, nbytes_left);
 #else
@@ -325,6 +327,9 @@ void
 ips_shortcpy(void* vdest, const void* vsrc, uint32_t nchars)
 )
 {
+#ifdef __MIC__
+    ipath_mic_vectorcpy(vdest, vsrc, nchars);
+#else
     unsigned char *dest = vdest;
     const unsigned char *src = vsrc;
 
@@ -337,6 +342,7 @@ ips_shortcpy(void* vdest, const void* vsrc, uint32_t nchars)
         case 2: *dest++ = *src++;
         case 1: *dest++ = *src++;
     }
+#endif
     return;
 }
 
@@ -709,6 +715,7 @@ ips_proto_mq_rts_match_callback(psm_mq_req_t req, int was_posted)
 	struct ips_pend_sends *pends = &proto->pend_sends;
 	struct ips_pend_sreq *sreq = psmi_mpool_get(proto->pend_sends_pool);
 	psmi_assert(sreq != NULL);
+	if (sreq == NULL) return PSM_NO_MEMORY;
 	sreq->type = IPS_PENDSEND_EAGER_REQ;
 	sreq->req  = req;
 
@@ -759,7 +766,7 @@ ips_proto_mq_push_eager_req(struct ips_proto *proto, psm_mq_req_t req)
     }
 
     flow->fn.xfer.enqueue(flow, scb);
-    (void)flow->fn.xfer.flush(flow, NULL);
+    flow->fn.xfer.flush(flow, NULL);
 
     return PSM_OK;
 }
@@ -771,12 +778,69 @@ ips_proto_mq_push_eager_data(struct ips_proto *proto, psm_mq_req_t req)
     ips_epaddr_t *ipsaddr = req->rts_peer->ptladdr;
     uint32_t nbytes_this;
     uint32_t nbytes_left = req->send_msglen - req->recv_msgoff;
-    uint16_t frag_size = ipsaddr->epr.epr_piosize;
-    struct ips_flow *flow = &ipsaddr->flows[EP_FLOW_GO_BACK_N_PIO];
+    uint16_t frag_size;
+    struct ips_flow *flow;
     ips_scb_t *scb;
 
     psmi_assert(nbytes_left > 0);
 
+    if (!(proto->flags & IPS_PROTO_FLAG_MQ_EAGER_SDMA)) goto spio;
+
+    flow = &ipsaddr->flows[EP_FLOW_GO_BACK_N_DMA];
+    frag_size = flow->frag_size;
+    nbytes_this = 131072/8;
+    while (nbytes_left > 0) {
+      scb = ips_scbctrl_alloc(proto->scbc_rv, 1, 0, 0);
+	if (scb == NULL)
+	    return PSM_OK_NO_PROGRESS;
+
+#if 0
+        /* turn on to use single frag-size packet */
+        nbytes_this = min(frag_size, nbytes_left);
+#else
+        nbytes_this = min(nbytes_this, nbytes_left);
+#endif
+
+	ips_scb_length(scb) = nbytes_this;
+	ips_scb_subopcode(scb) = OPCODE_SEQ_MQ_CTRL;
+	ips_scb_mqhdr (scb) = MQ_MSG_DATA_REQ_BLK;
+	ips_scb_buffer(scb) = (void *)(buf + req->recv_msgoff);
+	ips_scb_mqparam(scb).u32w0 = req->rts_reqidx_peer;
+	ips_scb_mqparam(scb).u32w1 = req->recv_msgoff;
+
+	if (nbytes_left == nbytes_this) {
+	    ips_scb_cb(scb) = ips_proto_mq_eager_complete;
+	    ips_scb_cb_param(scb) = req;
+	} else {
+	    req->send_msgoff += nbytes_this;
+	}
+
+	scb->nfrag = (nbytes_this + frag_size - 1) / frag_size;
+	scb->frag_size = frag_size;
+
+	/* attach checksum if enabled, this matches what is done for tid-sdma */
+	if (proto->flags&IPS_PROTO_FLAG_CKSUM && nbytes_left==nbytes_this) {
+	    uint32_t cksum = 0xffffffff;
+	    cksum = ips_crc_calculate(req->send_msglen, req->buf, cksum);
+	    scb->ips_lrh.data[0].u32w0 = cksum;
+	}
+
+	ips_scb_flags(scb) |= IPS_SEND_FLAG_ACK_REQ;
+	ips_scb_flags(scb) |= IPS_SEND_FLAG_WAIT_SDMA;
+	SLIST_NEXT(scb, next) = NULL;
+
+	flow->fn.xfer.enqueue(flow, scb);
+	flow->fn.xfer.flush(flow, NULL);
+
+	nbytes_left      -= nbytes_this;
+	req->recv_msgoff += nbytes_this;
+    }
+
+    return PSM_OK;
+
+spio:
+    flow = &ipsaddr->flows[EP_FLOW_GO_BACK_N_PIO];
+    frag_size = flow->frag_size;
     while (nbytes_left > 0) {
       scb = ips_scbctrl_alloc(proto->scbc_rv, 1, 0, 0);
 	if (scb == NULL)
@@ -792,6 +856,9 @@ ips_proto_mq_push_eager_data(struct ips_proto *proto, psm_mq_req_t req)
 
 	ips_scb_cb(scb) = ips_proto_mq_eager_complete;
 	ips_scb_cb_param(scb) = req;
+	if (nbytes_left == nbytes_this) {
+	    ips_scb_flags(scb) |= IPS_SEND_FLAG_ACK_REQ;
+	}
 #if 0
 	_IPATH_INFO("send req %p, off %d/%d, len %d, last=%s\n",
 		req, req->send_msgoff, req->send_msglen, nbytes_this,
@@ -800,7 +867,7 @@ ips_proto_mq_push_eager_data(struct ips_proto *proto, psm_mq_req_t req)
 	SLIST_NEXT(scb, next) = NULL;
 
 	flow->fn.xfer.enqueue(flow, scb);
-	(void)flow->fn.xfer.flush(flow, NULL);
+	flow->fn.xfer.flush(flow, NULL);
 
 	nbytes_left      -= nbytes_this;
 	req->recv_msgoff += nbytes_this;
@@ -823,7 +890,8 @@ ips_proto_mq_handle_cts(struct ips_proto *proto, ptl_arg_t *args)
     msglen      = args[1].u32w0;
     
     req = psmi_mpool_find_obj_by_index(mq->sreq_pool, reqidx);
-    psmi_assert_always(req != NULL);
+    psmi_assert(req != NULL);
+    if (req == NULL) return IPS_RECVHDRQ_BREAK;
 
     if (msglen == 0) {
 	ips_proto_mq_rv_complete(req);
@@ -831,6 +899,8 @@ ips_proto_mq_handle_cts(struct ips_proto *proto, ptl_arg_t *args)
     }
 
     sreq	      = psmi_mpool_get(proto->pend_sends_pool);
+    psmi_assert(sreq != NULL);
+    if (sreq == NULL) return IPS_RECVHDRQ_BREAK;
     sreq->type	      = IPS_PENDSEND_EAGER_DATA;
     sreq->req	      = req;
     req->rts_reqidx_peer = reqidx_peer;

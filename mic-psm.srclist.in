@@ -1,0 +1,5 @@
+%SBINPREFIX%/psmd
+%LIBPREFIX%/libinfinipath.so.4
+%LIBPREFIX%/libinfinipath.so.4.0
+%LIBPREFIX%/libpsm_infinipath.so.1
+%LIBPREFIX%/libpsm_infinipath.so.1.15

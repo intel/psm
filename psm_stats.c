@@ -61,9 +61,8 @@ psmi_stats_register_type(const char *heading,
     psm_error_t err = PSM_OK;
 
     entries = psmi_calloc(PSMI_EP_NONE, STATS, num_entries, sizeof(struct psmi_stats_entry));
-    PSMI_CHECKMEM(err, entries);
-
     type = psmi_calloc(PSMI_EP_NONE, STATS, 1, sizeof(struct psmi_stats_type));
+    PSMI_CHECKMEM(err, entries);
     PSMI_CHECKMEM(err, type);
 
     type->entries = entries;
@@ -80,8 +79,11 @@ psmi_stats_register_type(const char *heading,
     }
 
     STAILQ_INSERT_TAIL(&psmi_stats, type, next);
+    return err;
 
 fail:
+    if (entries) psmi_free(entries);
+    if (type) psmi_free(type);
     return err;
 }
 
@@ -152,7 +154,8 @@ stats_parse_enabled_mask(const char *stats_string)
 	       *e != '|' && *e != ':')
 	    e++;
 	if (e > b) { /* something new to parse */
-	    int len = min(e - b, sizeof buf - 1);
+	    int len = ((e - b) > (sizeof buf - 1)) ?
+			(sizeof buf - 1) : (e - b);
 	    strncpy(buf, b, len);
 	    buf[len] = '\0';
 	    stats_enabled_mask |= typestring_to_type(buf);
@@ -433,6 +436,7 @@ psmi_stats_epaddr_register(struct mpspawn_stats_init_args *args)
     psm_ep_t ep;
     struct mpspawn_stats_add_args mp_add;
     struct stats_epaddr *stats_ctx;
+    psm_error_t err = PSM_OK;
 
     if (args->mq == NULL)
 	return PSM_OK;
@@ -452,8 +456,10 @@ psmi_stats_epaddr_register(struct mpspawn_stats_init_args *args)
     if (desc == NULL)
 	return PSM_NO_MEMORY;
     flags = psmi_malloc(ep, STATS, sizeof(uint16_t) * num_ep_stats * (num_ep+1));
-    if (flags == NULL)
+    if (flags == NULL) {
+	psmi_free(desc);
 	return PSM_NO_MEMORY;
+    }
 
     /* Get the descriptions/flags from each device */ 
     i = 0;
@@ -475,13 +481,17 @@ psmi_stats_epaddr_register(struct mpspawn_stats_init_args *args)
 			    
     desc_i  = desc + num_ep_stats;
     flags_i = flags + num_ep_stats;
+    memset(desc_i, 0, sizeof(char*)*num_ep*num_ep_stats);
+
     for (i = 0; i < num_ep; i++) {
 	for (j = 0; j < num_ep_stats; j++) {
 	    snprintf(buf, sizeof buf - 1, "<%*d> %s", nz, i, desc[j]);
 	    buf[sizeof buf - 1] = '\0';
 	    p = psmi_strdup(ep, buf);
-	    if (p == NULL)
-		return PSM_NO_MEMORY;
+	    if (p == NULL) {
+		err = PSM_NO_MEMORY;
+		goto clean;
+	    }
 	    desc_i [i * num_ep_stats + j] = p;
 	    flags_i[i * num_ep_stats + j] = flags[j];
 	}
@@ -494,8 +504,10 @@ psmi_stats_epaddr_register(struct mpspawn_stats_init_args *args)
     mp_add.desc = desc_i;
     mp_add.flags = flags_i;
     stats_ctx = psmi_malloc(ep, STATS, sizeof(struct stats_epaddr));
-    if (stats_ctx == NULL)
-	return PSM_NO_MEMORY;
+    if (stats_ctx == NULL) {
+	err = PSM_NO_MEMORY;
+	goto clean;
+    }
     stats_ctx->ep = ep;
     stats_ctx->epaddr_map_fn = args->epaddr_map_fn;
     stats_ctx->num_ep = num_ep;
@@ -504,16 +516,17 @@ psmi_stats_epaddr_register(struct mpspawn_stats_init_args *args)
 
     args->add_fn(&mp_add);
 
+clean:
     /* Now we can free all the descriptions */
     for (i = 0; i < num_ep; i++) {
 	for (j = 0; j < num_ep_stats; j++)
-	    psmi_free(desc_i[i * num_ep_stats + j]);
+	    if (desc_i[i * num_ep_stats + j]) psmi_free(desc_i[i * num_ep_stats + j]);
     }
 
     psmi_free(desc);
     psmi_free(flags);
 
-    return PSM_OK;
+    return err;
 }
 
 static 
@@ -553,6 +566,8 @@ stats_register_ipath_counters(psm_ep_t ep)
 			     entries,
 			     nc+npc,
 			     ep);
+    return;
+
 bail:
     if (cnames != NULL)
 	    infinipath_release_names(cnames);
@@ -589,6 +604,8 @@ stats_register_ipath_stats(psm_ep_t ep)
 			     entries,
 			     ns,
 			     ep);
+    return;
+
 bail:
     if (snames != NULL)
 	    infinipath_release_names(snames);

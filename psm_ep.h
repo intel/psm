@@ -39,6 +39,10 @@
 #ifndef _PSMI_EP_H
 #define _PSMI_EP_H
 
+#ifdef PSM_HAVE_SCIF
+#include <scif.h>
+#endif
+
 /* 
  * EPIDs encode the following information:
  * 
@@ -65,22 +69,14 @@
     ((((uint64_t)sl)&0xf)<<4) |				       \
     (((uint64_t)hca_type)&0xf) )
 
-#define PSMI_EPID_UNPACK_EXT(epid,lid,context,subcontext,hca_type,sl) do { \
-    (lid) = ((epid)>>16)&0xffff;					\
-    (subcontext) = ((epid)>>14)&0x3;					\
-    (context) = ((epid)>>8)&0x3f;					\
-    (sl) = ((epid)>>4)&0xf;						\
-    (hca_type) = ((epid)&0xf);						\
-  } while (0)
-
 #define PSMI_EPID_PACK(lid,context,subcontext)	\
   PSMI_EPID_PACK_EXT(lid,context,subcontext,PSMI_HCA_TYPE_DEFAULT, PSMI_SL_DEFAULT)
 
-#define PSMI_EPID_UNPACK(epid,lid,context,subcontext) do {	\
-    uint32_t hca_type __unused__;				\
-    uint32_t sl __unused__;					\
-    PSMI_EPID_UNPACK_EXT(epid,lid,context,subcontext,hca_type,sl);	\
-  } while (0)
+#define PSMI_EPID_GET_LID(epid)         (((epid)>>16)&0xffff)
+#define PSMI_EPID_GET_SUBCONTEXT(epid)  (((epid)>>14)&0x3)
+#define PSMI_EPID_GET_CONTEXT(epid)     (((epid)>>8)&0x3f)
+#define PSMI_EPID_GET_SL(epid)          (((epid)>>4)&0xf)
+#define PSMI_EPID_GET_HCATYPE(epid)     (((epid)>>0)&0xf)
 
 #define PSMI_MIN_EP_CONNECT_TIMEOUT (2 * SEC_ULL)
 #define PSMI_MIN_EP_CLOSE_TIMEOUT   (2 * SEC_ULL)
@@ -105,6 +101,15 @@ struct psm_ep {
     psm_ep_errhandler_t	errh;
     int			devid_enabled[PTL_MAX_INIT];
     int			memmode;    /**> min, normal, large memory mode */
+
+#ifdef PSM_HAVE_SCIF
+    scif_epd_t		scif_epd;    /* scif listen endpoint */
+    int                 scif_dma_threshold; /* DMA message size threshold */
+    int			scif_mynodeid; /* my scif node ID */
+    int			scif_nnodes; /* Number of scif nodes on system */
+    int                 scif_dma_mode;
+    pthread_t           scif_thread; /* Thread listening for SCIF connects */
+#endif
 
     uint32_t	ipath_num_sendbufs; /**> Number of allocated send buffers */
     uint32_t    ipath_num_descriptors; /** Number of allocated scb descriptors*/
@@ -187,8 +192,6 @@ union psmi_seqnum {
   uint32_t val;
 } psmi_seqnum_t;
 
-#define IPATH_MAX_RAILS		4
-
 struct psm_epaddr {
     struct ptl	    *ptl;	   /* Which ptl owns this epaddress */
     ptl_ctl_t	    *ptlctl;	   /* The control structure for the ptl */
@@ -210,8 +213,8 @@ struct psm_epaddr {
     };
 
     /* it makes sense only in master */
-    uint64_t		mctxt_gidhi[IPATH_MAX_RAILS];
-    psm_epid_t		mctxt_epid[IPATH_MAX_RAILS];
+    uint64_t		mctxt_gidhi[IPATH_MAX_UNIT];
+    psm_epid_t		mctxt_epid[IPATH_MAX_UNIT];
     int			mctxt_epcount;
     int			mctxt_nsconn;	/* # slave connection */
     uint16_t		mctxt_send_seqnum;

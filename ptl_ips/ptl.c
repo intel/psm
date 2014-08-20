@@ -175,7 +175,7 @@ ips_ptl_epaddr_stats_get(psm_epaddr_t epaddr, uint64_t *stats_o)
 {
     struct ptl_epaddr *ipsaddr = epaddr->ptladdr;
     int i, num_stats = sizeof(struct ptl_epaddr_stats) / sizeof (uint64_t);
-    uint64_t *stats_i = (uint64_t *) &ipsaddr->stats.err_chk_send;
+    uint64_t *stats_i = (uint64_t *) &ipsaddr->stats;
 
     for (i = 0; i < num_stats; i++)
 	stats_o[i] = stats_i[i];

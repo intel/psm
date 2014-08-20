@@ -30,7 +30,6 @@
 # SOFTWARE.
 #
 
-top_srcdir := ..
 include $(top_srcdir)/buildflags.mak
 INCLUDES += -I$(top_srcdir)
 
@@ -44,5 +43,3 @@ all: ${${TARGLIB}-objs}
 clean:
 	rm -f *.o
 
-install:
-	@echo "Nothing to do for install."

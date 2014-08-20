@@ -1,0 +1,112 @@
+# Copyright (c) 2012. Intel Corporation. All rights reserved.
+#
+# This software is available to you under a choice of one of two
+# licenses.  You may choose to be licensed under the terms of the GNU
+# General Public License (GPL) Version 2, available from the file
+# COPYING in the main directory of this source tree, or the
+# OpenIB.org BSD license below:
+#
+#     Redistribution and use in source and binary forms, with or
+#     without modification, are permitted provided that the following
+#     conditions are met:
+#
+#      - Redistributions of source code must retain the above
+#        copyright notice, this list of conditions and the following
+#        disclaimer.
+#
+#      - Redistributions in binary form must reproduce the above
+#        copyright notice, this list of conditions and the following
+#        disclaimer in the documentation and/or other materials
+#        provided with the distribution.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+# EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+# MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+# NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+# BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+# ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+# CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
+
+%define debug_package ${nil}
+%{!?install_prefix:%define install_prefix /usr}
+
+Summary: Intel PSM Libraries for Intel Xeon Phi
+Name: intel-mic-psm-card
+Version: @VERSION@
+Release: @RELEASE@
+License: GPL
+Group: System Environment/Damon
+URL: http://www.intel.com/
+Source0: %{name}-%{version}-%{release}.tar.gz
+Prefix: /usr
+BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}-root
+Requires(post): /sbin/ldconfig
+Requires(postun): /sbin/ldconfig
+@REQUIRES@
+
+%package devel
+Summary: Development files for Intel Xeon Phi
+Group: System Environment/Development
+Requires: %{name} = %{version}-%{release}
+Requires(post): /sbin/ldconfig
+Requires(postun): /sbin/ldconfig
+
+%description
+The PSM Messaging API, or PSM API, is Intel's low-level
+user-level communications interface for the True Scale
+family of products. PSM users are enabled with mechanisms
+necessary to implement higher level communications
+interfaces in parallel environments.
+
+%description devel
+Development files for libpsm_infinipath library
+
+%prep
+%setup -q -n %{name}-%{version}-%{release}
+
+%build
+%{__make}
+
+%install
+rm -rf $RPM_BUILD_ROOT
+mkdir -p $RPM_BUILD_ROOT
+%{make_install}
+%if %(test "%{install_prefix}" = "/usr" && echo 0 || echo 1)
+    cp -a mic/* $RPM_BUILD_ROOT
+    find $RPM_BUILD_ROOT/ -name "*.in" -exec rm -f {} \;
+%endif
+
+%clean
+rm -rf $RPM_BUILD_ROOT
+
+%post -p /sbin/ldconfig
+%postun -p /sbin/ldconfig
+%post devel -p /sbin/ldconfig
+%postun devel -p /sbin/ldconfig
+
+%files
+%defattr(-,root,root,-)
+%{install_prefix}/lib64/libpsm_infinipath.so.*
+%{install_prefix}/lib64/libinfinipath.so.*
+%if %(test "%{install_prefix}" = "/usr" && echo 0 || echo 1)
+    %{install_prefix}/psm.filelist
+    %{_sysconfdir}/sysconfig/mic/conf.d/psm.conf
+%endif
+
+%files devel
+%defattr(-,root,root,-)
+%{install_prefix}/lib64/libpsm_infinipath.so
+%{install_prefix}/lib64/libinfinipath.so
+
+%changelog
+* Thu Apr 11 2013 Mitko Haralanov <mitko.haralanov@intel.com>
+- Remove any unwanted files before packaging
+* Wed Nov 28 2012 Mitko Haralanov <mitko.haralanov@intel.com>
+- Add Xeon Phi devel package
+* Thu Nov 9 2012 Mitko Haralanov <mitko.haralanov@intel.com>
+- Add TMI to package
+* Mon Nov 5 2012 Mitko Haralanov <mitko.haralanov@intel.com>
+- Initial build.
+

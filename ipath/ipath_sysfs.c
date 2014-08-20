@@ -31,6 +31,7 @@
  * SOFTWARE.
  */
 
+#ifndef __MIC__
 // This file contains a simple sysfs interface used by the low level
 // infinipath protocol code.  It also implements the interface to ipathfs.
 
@@ -39,12 +40,15 @@
 #include <ctype.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <string.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
 
-#include "ipath_user.h"
+#include "ipath_service.h"
 
 static char *sysfs_path;
 static size_t sysfs_path_len;
@@ -745,77 +749,4 @@ bail:
     return ret;
 }
 
-/*
- * This function is necessary in a udev-based world.  There can be an
- * arbitrarily long (but typically less than one second) delay between
- * a driver getting loaded and any dynamic special files turning up.
- *
- * The timeout is in milliseconds.  A value of zero means "callee
- * decides timeout".  Negative is infinite.
- *
- * Returns 0 on success, -1 on error or timeout.  Check errno to see
- * whether there was a timeout (ETIMEDOUT) or an error (any other
- * non-zero value).
- */
-int ipath_wait_for_device(const char *path, long timeout)
-{
-    int saved_errno;
-    struct stat st;
-    long elapsed;
-    int ret;
-
-    if (timeout == 0)
-        timeout = 15000;
-
-    elapsed = 0;
-
-    while (1) {
-        static const long default_ms = 250;
-        struct timespec req = { 0 };
-        long ms;
-
-        ret = stat(path, &st);
-        saved_errno = errno;
-
-        if (ret == 0 || (ret == -1 && errno != ENOENT))
-            break;
-
-        if (timeout - elapsed == 0) {
-            saved_errno = ETIMEDOUT;
-            break;
-        }
-
-        if (elapsed == 0) {
-            if (timeout == -1)
-                _IPATH_DBG("Device file %s not present on first check; "
-                           "waiting indefinitely...\n", path);
-            else
-                _IPATH_DBG("Device file %s not present on first check; "
-                           "waiting up to %.1f seconds...\n",
-                           path, timeout / 1e3);
-        }
-
-        if (timeout < 0 || timeout - elapsed >= default_ms)
-            ms = default_ms;
-        else
-            ms = timeout;
-
-        elapsed += ms;
-        req.tv_nsec = ms * 1000000;
-
-        ret = nanosleep(&req, NULL);
-        saved_errno = errno;
-
-        if (ret == -1)
-            break;
-    }
-
-    if (ret == 0)
-        _IPATH_DBG("Found %s after %.1f seconds\n", path, elapsed / 1e3);
-    else
-        _IPATH_INFO("The %s device failed to appear after %.1f seconds: %s\n",
-                    path, elapsed / 1e3, strerror(saved_errno));
-
-    errno = saved_errno;
-    return ret;
-}
+#endif		//__MIC__

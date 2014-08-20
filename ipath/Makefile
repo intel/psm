@@ -1,3 +1,4 @@
+# Copyright (c) 2012. Intel Corporation. All rights reserved.
 # Copyright (c) 2006-2010. QLogic Corporation. All rights reserved.
 # Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
 #
@@ -34,10 +35,9 @@ TARGLIB := libinfinipath
 MAJOR := $(IPATH_LIB_MAJOR)
 MINOR := $(IPATH_LIB_MINOR)
 
-top_srcdir := ..
 include $(top_srcdir)/buildflags.mak
 BASECFLAGS += -D_GNU_SOURCE
-INCLUDES += -I../ptl_ips
+INCLUDES += -I$(top_srcdir)/ptl_ips
 
 ifeq (${arch},x86_64)
 	PLATFORM_OBJ=ipath_dwordcpy-x86_64-fast.o
@@ -46,6 +46,8 @@ else
 endif
 
 ${TARGLIB}-objs := ipath_debug.o ipath_time.o ipath_proto.o \
+	ipath_utils.o ipath_service.o ipath_protomic.o \
+	ipath_mic_vectorcpy.o ipath_mic_vectorpio.o \
 	ipath_dwordcpy-$(arch).o ipath_i2cflash.o ipath_sysfs.o ipath_syslog.o \
 	ipath_write_pio-$(arch).o $(PLATFORM_OBJ)
 
@@ -73,10 +75,10 @@ ${TARGLIB}.so.${MAJOR}.${MINOR}: ${${TARGLIB}-objs}
 	$(CC) -c $(BASECFLAGS) $(INCLUDES) _revision.c -o _revision.o
 	$(CC) -o $@ -Wl,-soname=${TARGLIB}.so.${MAJOR} -shared \
 		-Wl,--unique='*fastpath*' \
-		${${TARGLIB}-objs} _revision.o $(LDFLAGS)
+		${${TARGLIB}-objs} _revision.o $(LDFLAGS) $(if $(MIC:0=),$(SCIF_LINK_FLAGS))
 
 %.o: %.c
-	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(CFLAGS) $(INCLUDES) $(if $(MIC:0=),$(SCIF_INCLUDE_FLAGS)) -c $< -o $@
 
 %.o: %.S
 	$(CC) $(ASFLAGS) -c $< -o $@
@@ -84,7 +86,7 @@ ${TARGLIB}.so.${MAJOR}.${MINOR}: ${${TARGLIB}-objs}
 ipath_debug.o: WERROR :=
 # This is temporarily necessary in order to get backtrace to work. Bug 3536
 ipath_debug.o: ipath_debug.c
-	gcc $(BASECFLAGS) $(INCLUDES) -c $< -o $@
+	$(CC) $(BASECFLAGS) $(INCLUDES) -c $< -o $@
 
 ipath_write_pio-ppc.o: ipath_write_pio-ppc.c
 	$(CC) $(CFLAGS) -maltivec $(INCLUDES) -c $< -o $@

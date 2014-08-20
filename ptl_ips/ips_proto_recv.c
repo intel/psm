@@ -290,22 +290,35 @@ _process_mq(struct ips_recvhdrq_event *rcv_ev)
 			mode == MQ_MSG_DATA_BLK &&
 			req && req->state == MQ_STATE_COMPLETE) {
 		uint32_t cksum = ips_crc_calculate(
-			req->send_msglen - p_hdr->data[0].u32w1,
+			req->recv_msglen - p_hdr->data[0].u32w1,
 			(uint8_t *)req->buf + p_hdr->data[0].u32w1, 
 			0xffffffff);
 		if (p_hdr->data[0].u32w0 != cksum) {
 			psmi_handle_error(PSMI_EP_NORETURN, PSM_INTERNAL_ERR,
 			"ErrPkt: Checksum mismatch. Expected: 0x%08x, Received: 0x%08x Source LID: %i. Aborting! \n", p_hdr->data[0].u32w0, cksum, __be16_to_cpu(flow->path->epr_dlid));
-			ips_proto_dump_data(req->buf, req->send_msglen);
+			ips_proto_dump_data(req->buf, req->recv_msglen);
 		}
 	}
 
-    } else if (mode == MQ_MSG_DATA_REQ) {
+    } else if (mode == MQ_MSG_DATA_REQ || mode == MQ_MSG_DATA_REQ_BLK) {
 	req = psmi_mpool_find_obj_by_index(mq->rreq_pool,
 				     p_hdr->data[1].u32w0);
-	psmi_assert(req != NULL);
+	if (!req) goto skip_ack_req;
 	psmi_mq_handle_data(req, epaddr, p_hdr->data[1].u32w0,
 		p_hdr->data[1].u32w1, (void *) payload, paylen);
+
+	/* If checksum is enabled, this matches what is done for tid-sdma */
+	if (rcv_ev->proto->flags & IPS_PROTO_FLAG_CKSUM &&
+			mode == MQ_MSG_DATA_REQ_BLK &&
+			req->state == MQ_STATE_COMPLETE) {
+		uint32_t cksum = ips_crc_calculate(
+			req->recv_msglen, req->buf, 0xffffffff);
+		if (p_hdr->data[0].u32w0 != cksum) {
+			psmi_handle_error(PSMI_EP_NORETURN, PSM_INTERNAL_ERR,
+			"ErrPkt: Checksum mismatch. Expected: 0x%08x, Received: 0x%08x Source LID: %i. Aborting! \n", p_hdr->data[0].u32w0, cksum, __be16_to_cpu(flow->path->epr_dlid));
+			ips_proto_dump_data(req->buf, req->recv_msglen);
+		}
+	}
 
     } else if (mode == MQ_MSG_CTS_EGR) {
 	args = p_hdr->data;
@@ -412,19 +425,19 @@ void ips_tidflow_nak_post_process(struct ips_flow *flow,
   
   ips_scb_t *scb;
   struct ips_scb_unackedq *unackedq = &flow->scb_unacked;
-  psmi_seqnum_t new_flowgenseq __unused__;
+#ifdef PSM_DEBUG
+  psmi_seqnum_t new_flowgenseq;
 	
   new_flowgenseq.val = p_hdr->data[1].u32w0;
   /* Update any pending scb's to the new generation count.
    * Note: flow->xmit_seq_num was updated to the new generation when the
    * NAK was received. 
    */
-  
-  
   psmi_assert(STAILQ_FIRST(unackedq)->seq_num.flow==new_flowgenseq.flow);
   psmi_assert(STAILQ_FIRST(unackedq)->seq_num.gen != new_flowgenseq.gen);
   psmi_assert(STAILQ_FIRST(unackedq)->
 	seq_num.seq-STAILQ_FIRST(unackedq)->nfrag+1 == new_flowgenseq.seq);
+#endif
 
   /* Update unacked scb's to use the new flowgenseq */
   scb = STAILQ_FIRST(unackedq);
@@ -456,7 +469,8 @@ ips_proto_process_ack(struct ips_recvhdrq_event *rcv_ev)
     
     ips_ptladdr_lock(ipsaddr);
     
-    IPS_FLOWID_UNPACK(p_hdr->flowid, protocol, flowid);
+    protocol = IPS_FLOWID_GET_PROTO(p_hdr->flowid);
+    flowid = IPS_FLOWID_GET_INDEX(p_hdr->flowid);
     ack_seq_num.psn = p_hdr->ack_seq_num;
 
     switch(protocol){
@@ -476,10 +490,12 @@ ips_proto_process_ack(struct ips_recvhdrq_event *rcv_ev)
       break;
     default:
       _IPATH_ERROR("OPCODE_ACK: Unknown flow type %d in ACK\n", flowid);
+      goto ret;
     }
     
     unackedq = &flow->scb_unacked;
     scb_pend = &flow->scb_pend;
+    if (STAILQ_EMPTY(unackedq)) goto ret;  // only for Klockwork scan.
     last_seq_num = STAILQ_LAST(unackedq, ips_scb, nextq)->seq_num;
     
     INC_TIME_SPEND(TIME_SPEND_USER2);
@@ -555,7 +571,7 @@ ips_proto_process_ack(struct ips_recvhdrq_event *rcv_ev)
     }
     
     /* Reclaimed some credits - attempt to flush flow */
-    (void)flow->fn.xfer.flush(flow, NULL);
+    flow->fn.xfer.flush(flow, NULL);
     
     /*
      * If the next packet has not even been put on the wire, cancel the
@@ -589,7 +605,8 @@ _process_nak(struct ips_recvhdrq_event *rcv_ev)
     
     ips_ptladdr_lock(ipsaddr);
     
-    IPS_FLOWID_UNPACK(p_hdr->flowid, protocol, flowid);
+    protocol = IPS_FLOWID_GET_PROTO(p_hdr->flowid);
+    flowid = IPS_FLOWID_GET_INDEX(p_hdr->flowid);
 
     INC_TIME_SPEND(TIME_SPEND_USER3);
 
@@ -615,18 +632,20 @@ _process_nak(struct ips_recvhdrq_event *rcv_ev)
       break;
     default:
       _IPATH_ERROR("OPCODE_NAK: Unknown flow type %d in ACK\n", flowid);
+      goto ret;
     }
     
     unackedq = &flow->scb_unacked;
     scb_pend = &flow->scb_pend;
+    if (STAILQ_EMPTY(unackedq)) goto ret;  // only for Klockwork scan.
     last_seq_num = STAILQ_LAST(unackedq, ips_scb, nextq)->seq_num;
         
     ipsaddr->stats.nak_recv++;
 
     _IPATH_VDBG("got a nack %d on flow %d, "
 		"first is %d, last is %d\n", ack_seq_num.psn,
-		flowid, STAILQ_FIRST(unackedq)->seq_num.psn,
-		STAILQ_LAST(unackedq, ips_scb, nextq)->seq_num.psn);
+		flowid, STAILQ_EMPTY(unackedq)?-1:STAILQ_FIRST(unackedq)->seq_num.psn,
+		STAILQ_EMPTY(unackedq)?-1:STAILQ_LAST(unackedq, ips_scb, nextq)->seq_num.psn);
 
     /* For tidflow, we want to match all flow/gen/seq,
        for gobackn, we only match pkt#, msg# is not known.
@@ -720,7 +739,7 @@ _process_nak(struct ips_recvhdrq_event *rcv_ev)
       flow->ack_interval = max((flow->credits >> 2) - 1, 1);
       
       /* Flush pending scb's */
-      (void)flow->fn.xfer.flush(flow, &num_resent);
+      flow->fn.xfer.flush(flow, &num_resent);
       ipsaddr->stats.send_rexmit += num_resent;
     }
     
@@ -997,11 +1016,8 @@ ips_proto_process_unknown(const struct ips_recvhdrq_event *rcv_ev)
     char *pkt_type;
     int opcode = (int) p_hdr->sub_opcode;
     double t_elapsed;
-    psm_protocol_type_t protocol __unused__;
-    ptl_epaddr_flow_t flowid;
+    ptl_epaddr_flow_t flowid = IPS_FLOWID_GET_INDEX(p_hdr->flowid);
     const uint16_t lmc_mask = ~((1 << rcv_ev->proto->epinfo.ep_lmc) - 1);
-
-    IPS_FLOWID_UNPACK(p_hdr->flowid, protocol, flowid);
 
     /* 
      * If the protocol is disabled or not yet enabled, no processing happens
@@ -1079,6 +1095,7 @@ ips_proto_process_unknown(const struct ips_recvhdrq_event *rcv_ev)
     if (sepid == NULL) {  /* Never seen crosstalk from this node, log it */
 	sepid = (struct ips_stray_epid *) 
 		psmi_calloc(proto->ep, UNDEFINED, 1, sizeof(struct ips_stray_epid));
+	if (sepid == NULL) return 0; /* skip packet if no memory */ 
 	psmi_epid_add(PSMI_EP_CROSSTALK, epid, (void *) sepid);
 	sepid->epid = epid;
 	if (proto->stray_warn_interval)
@@ -1433,7 +1450,8 @@ ips_proto_process_packet_inner(struct ips_recvhdrq_event *rcv_ev)
 		psm_protocol_type_t protocol;
 		ptl_epaddr_flow_t flowid;
 
-		IPS_FLOWID_UNPACK(p_hdr->flowid, protocol, flowid);
+		protocol = IPS_FLOWID_GET_PROTO(p_hdr->flowid);
+		flowid = IPS_FLOWID_GET_INDEX(p_hdr->flowid);
 		psmi_assert_always(protocol == PSM_PROTOCOL_GO_BACK_N);
 		flow = &ipsaddr->flows[flowid];
 		

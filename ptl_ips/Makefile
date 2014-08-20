@@ -30,7 +30,6 @@
 # SOFTWARE.
 #
 
-top_srcdir := ..
 include $(top_srcdir)/buildflags.mak
 INCLUDES += -I$(top_srcdir) -I$(top_srcidr)/ptl_ips
 
@@ -54,5 +53,3 @@ all: ${${TARGLIB}-objs}
 clean:
 	rm -f *.o
 
-install:
-	@echo "Nothing to do for install."

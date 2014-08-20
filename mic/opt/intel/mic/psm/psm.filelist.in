@@ -1,0 +1,7 @@
+dir /lib64 755 0 0
+file /lib64/libinfinipath.so.%IPATHMAJOR%.%IPATHMINOR% lib64/libinfinipath.so.%IPATHMAJOR%.%IPATHMINOR% 755 0 0
+slink /lib64/libinfinipath.so.%IPATHMAJOR% libinfinipath.so.%IPATHMAJOR%.%IPATHMINOR% 777 0 0
+slink /lib64/libinfinipath.so libinfinipath.so.%IPATHMAJOR%.%IPATHMINOR% 777 0 0
+file /lib64/libpsm_infinipath.so.%PSMMAJOR%.%PSMMINOR% lib64/libpsm_infinipath.so.%PSMMAJOR%.%PSMMINOR% 755 0 0
+slink /lib64/libpsm_infinipath.so.%PSMMAJOR% libpsm_infinipath.so.%PSMMAJOR%.%PSMMINOR% 777 0 0
+slink /lib64/libpsm_infinipath.so libpsm_infinipath.so.%PSMMAJOR%.%PSMMINOR% 777 0 0

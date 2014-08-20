@@ -129,7 +129,7 @@ psm_error_t ips_proto_fini(struct ips_proto *proto, int force,
 struct ips_pbc_header {
     union ipath_pbc		pbc;
     struct ips_message_header	hdr;
-};
+} PSMI_CACHEALIGN;
 
 /*
  * Control message structures
@@ -139,7 +139,7 @@ struct ips_pbc_header {
 struct ips_proto_ctrl_message {
     struct ips_pbc_header	pbc_hdr;
     uint8_t _hdr_uwords[IPS_HEADER_QUEUE_UWORDS_MAX<<2];
-};
+} PSMI_CACHEALIGN;
 
 /* Control messages saved in the control queue.  Even though we only
  * always send 2 ptl_args on the wire, some message types will save
@@ -422,10 +422,8 @@ struct ptl_epaddr_stats {
   ( ((((uint16_t)protocol)&0x7) << 3) |	      \
     (((uint16_t)flowindex)&0x7) )
 
-#define IPS_FLOWID_UNPACK(flow,protocol,flowindex) do {	\
-    (protocol) = ((flow)>>3)&0x7;                       \
-    (flowindex) = ((flow)&0x7);				\
-  } while (0)
+#define IPS_FLOWID_GET_PROTO(flow)    (((flow)>>3)&0x7)
+#define IPS_FLOWID_GET_INDEX(flow)    ((flow)&0x7)
 
 #define IPS_FLOWID2INDEX(flow)	\
    ((flow)&0x7)

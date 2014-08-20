@@ -49,6 +49,7 @@ void *psmi_memcpyo(void *dst, const void *src, size_t n)
     return dst;
 }
 #else
+#error "psmi_memcpyo() does not use psmi_mq_mtucpy()"
 #include <emmintrin.h>
 
 #define OPTERON_L1_CACHE_BYTES 65536

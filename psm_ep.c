@@ -110,13 +110,22 @@ psmi_ep_multirail(int *num_rails, uint32_t *unit, uint16_t *port)
     int i, j, ret, count=0;
     char *env;
     psm_error_t err = PSM_OK;
-    uint64_t gidh[IPATH_MAX_RAILS][3];
+    uint64_t gidh[IPATH_MAX_UNIT][3];
 
     env = getenv("PSM_MULTIRAIL");
     if (!env || atoi(env) == 0) {
 	*num_rails = 0;
 	return err;
     }
+#ifdef __MIC__
+    env = getenv("MPI_LOCALRANKID");
+    if (!env || atoi(env) == 0) {
+	_IPATH_INFO("PSM_MULTIRAIL is not supported and "
+			"ignored for this PSM mic version.\n");
+    }
+    *num_rails = 0;
+    return err;
+#endif
 
 /*
  * map is in format: unit:port,unit:port,...
@@ -134,7 +143,7 @@ psmi_ep_multirail(int *num_rails, uint32_t *unit, uint16_t *port)
 		unit[count] = i;
 		port[count] = j;
 		count++;
-		if (count == IPATH_MAX_RAILS) break;
+		if (count == IPATH_MAX_UNIT) break;
 		comma = strchr(comma+1, ',');
 	    }
 	}
@@ -166,16 +175,18 @@ psmi_ep_multirail(int *num_rails, uint32_t *unit, uint16_t *port)
     if ((err = psm_ep_num_devunits(&num_units))) {
 	return err;
     }
-    if (num_units > IPATH_MAX_RAILS) {
+    if (num_units > IPATH_MAX_UNIT) {
 	_IPATH_INFO("Found %d units, max %d units are supported, use %d\n",
-		num_units, IPATH_MAX_RAILS, IPATH_MAX_RAILS);
-	num_units = IPATH_MAX_RAILS;
+		num_units, IPATH_MAX_UNIT, IPATH_MAX_UNIT);
+	num_units = IPATH_MAX_UNIT;
     }
 
 /*
  * Get all the ports with a valid lid and gid, one per unit.
+ * we don't know which number is a valid unit, we just loop
+ * over all supported numbers.
  */
-    for (i = 0; i < num_units; i++) {
+    for (i = 0; i < IPATH_MAX_UNIT; i++) {
 	for (j = 1; j <= IPATH_MAX_PORT; j++) {
 	    ret = ipath_get_port_lid(i, j);
 	    if (ret == -1) continue;
@@ -188,6 +199,7 @@ psmi_ep_multirail(int *num_rails, uint32_t *unit, uint16_t *port)
 	    count++;
 	    break;
 	}
+	if (count == num_units) break;
     }
 
 /*
@@ -229,7 +241,7 @@ psmi_ep_devlids(uint16_t **lids, uint32_t *num_lids_o,
 	    goto fail;
 	}
 
-	for (i = 0; i < num_units; i++) {
+	for (i = 0; i < IPATH_MAX_UNIT; i++) {
 	    int j;
 	    for (j = 1; j <= IPATH_MAX_PORT; j++) {
 		    int lid = ipath_get_port_lid(i, j);
@@ -278,12 +290,7 @@ fail:
 uint64_t
 __psm_epid_nid(psm_epid_t epid)
 {
-    uint64_t lid;
-    uint64_t context __unused__;
-    uint64_t subcontext __unused__;
-
-    PSMI_EPID_UNPACK(epid, lid, context, subcontext);
-    return lid;
+    return PSMI_EPID_GET_LID(epid);
 }
 PSMI_API_DECL(psm_epid_nid)
 
@@ -292,11 +299,7 @@ PSMI_API_DECL(psm_epid_nid)
 uint64_t
 psmi_epid_subcontext(psm_epid_t epid)
 {
-    uint64_t subcontext;
-    uint64_t lid __unused__;
-    uint64_t context __unused__;
-    PSMI_EPID_UNPACK(epid, lid, context, subcontext);
-    return subcontext;
+    return PSMI_EPID_GET_SUBCONTEXT(epid);
 }
 
 /* Currently not exposed to users, we don't acknowledge the existence of
@@ -306,36 +309,19 @@ psmi_epid_subcontext(psm_epid_t epid)
 uint64_t
 psmi_epid_hca_type(psm_epid_t epid)
 {
-  uint64_t hca_type;
-  uint64_t lid __unused__;
-  uint64_t context __unused__;
-  uint64_t subcontext __unused__;
-  uint64_t sl __unused__;
-  PSMI_EPID_UNPACK_EXT(epid, lid, context, subcontext, hca_type, sl);
-  return hca_type;
+  return PSMI_EPID_GET_HCATYPE(epid);
 }
 
 uint64_t
 psmi_epid_sl(psm_epid_t epid)
 {
-  uint64_t sl;
-  uint64_t lid __unused__;
-  uint64_t context __unused__;
-  uint64_t subcontext __unused__;
-  uint64_t hca_type __unused__;
-  PSMI_EPID_UNPACK_EXT(epid, lid, context, subcontext, hca_type, sl);
-  return sl;
+  return PSMI_EPID_GET_SL(epid);
 }
 
 uint64_t
 __psm_epid_context(psm_epid_t epid)
 {
-    uint64_t lid __unused__;
-    uint64_t subcontext __unused__;
-    uint64_t context;
-
-    PSMI_EPID_UNPACK(epid, lid, context, subcontext);
-    return context;
+    return PSMI_EPID_GET_CONTEXT(epid);
 }
 PSMI_API_DECL(psm_epid_context)
 
@@ -410,7 +396,11 @@ __psm_ep_epid_lookup (psm_epid_t epid, psm_epconn_t *epconn)
 	     * from here without breaking the layering. */
 	    uint64_t lid, context, subcontext, hca_type, sl, try_sl;
 	    psm_epid_t try_epid;
-	    PSMI_EPID_UNPACK_EXT(epid, lid, context, subcontext, hca_type, sl);
+	    lid = PSMI_EPID_GET_LID(epid);
+	    context = PSMI_EPID_GET_CONTEXT(epid);
+	    subcontext = PSMI_EPID_GET_SUBCONTEXT(epid);
+	    hca_type = PSMI_EPID_GET_HCATYPE(epid);
+	    sl = PSMI_EPID_GET_SL(epid);
 	    for (try_sl = 0; !epaddr && try_sl < 16; try_sl++) {
 	      if (try_sl != sl) {
 	        try_epid = PSMI_EPID_PACK_EXT(lid, context, subcontext,
@@ -557,7 +547,7 @@ __psm_ep_open_opts_get_defaults(struct psm_ep_open_opts *opts)
 #endif
     
     opts->timeout = 30000000000LL; /* 30 sec */
-    opts->unit    = PSMI_UNIT_ID_ANY;
+    opts->unit    = IPATH_UNIT_ID_ANY;
     opts->port    = 0;
     opts->outsl    = PSMI_SL_DEFAULT;
 #if (PSM_VERNO >= 0x0107) && (PSM_VERNO <= 0x010a)
@@ -674,7 +664,7 @@ __psm_ep_open_internal(psm_uuid_t const unique_job_key, int *devid_enabled,
 				"Invalid timeout value %lld", 
 				(long long) opts.timeout);
 	goto fail;
-    } else if (num_units && (opts.unit < -1 || opts.unit >= (int) num_units)) {
+    } else if (num_units && (opts.unit < -1 || opts.unit >= IPATH_MAX_UNIT)) {
 	err = psmi_handle_error(NULL, PSM_PARAM_ERR, 
 				"Invalid Device Unit ID %d (%d units found)",
 				opts.unit, num_units);
@@ -706,14 +696,39 @@ __psm_ep_open_internal(psm_uuid_t const unique_job_key, int *devid_enabled,
 	setenv("IPATH_NO_CPUAFFINITY", "1", 1);
     }
 
+#ifdef __MIC__
+    /*
+     * On MIC, we always pick unit from /sys/class/qib/ipath/unit,
+     * but only do this if there is a HCA unit.
+     */
+    if (num_units > 0) {
+	char pathname[128];
+	struct stat st;
+	FILE *fp;
+	
+	snprintf(pathname, sizeof(pathname),
+		"/sys/class/qib/ipath/unit");
+	fp = NULL;
+	if (stat(pathname, &st) || S_ISDIR(st.st_mode) ||
+	!(fp = fopen(pathname, "r")) || (fscanf(fp, "%d", &opts.unit) != 1)) {
+	    err = psmi_handle_error(NULL, PSM_EP_DEVICE_FAILURE,
+				"Couldn't read from %s", pathname);
+	    if (fp) fclose(fp);
+	    goto fail;
+	}
+	fclose(fp);
+	psmi_assert(opts.unit != IPATH_UNIT_ID_ANY);
+	psmi_assert(opts.unit < IPATH_MAX_UNIT);
+    }
+#else
     /* If a specific unit is set in the environment, use that one. */
     if (!psmi_getenv("IPATH_UNIT", "Device Unit number (-1 autodetects)",
 		    PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_LONG,
-		    (union psmi_envvar_val) PSMI_UNIT_ID_ANY,
+		    (union psmi_envvar_val) IPATH_UNIT_ID_ANY,
 		    &env_unit_id)) {
 	opts.unit = env_unit_id.e_long;
 	/* set mock UNIT *just* for setaffinity */
-	if (opts.unit != PSMI_UNIT_ID_ANY) {
+	if (opts.unit != IPATH_UNIT_ID_ANY) {
 	    char buf[32];
 	    snprintf(buf, sizeof buf - 1, "%d", (int) opts.unit);
 	    buf[sizeof buf - 1] = '\0';
@@ -723,6 +738,7 @@ __psm_ep_open_internal(psm_uuid_t const unique_job_key, int *devid_enabled,
 	else
 	    unsetenv("IPATH_UNIT");
     }
+#endif
 
     if (!psmi_getenv("IPATH_PORT", "IB Port number (<= 0 autodetects)",
 		    PSMI_ENVVAR_LEVEL_USER, PSMI_ENVVAR_TYPE_LONG,
@@ -906,19 +922,16 @@ __psm_ep_open_internal(psm_uuid_t const unique_job_key, int *devid_enabled,
 	goto fail;
 
     if (psmi_ep_device_is_enabled(ep, PTL_DEVID_SELF)) {
-	if ((err = psmi_ptl_self.init((const psm_ep_t) ep, self_ptl,
-				       &ep->ptl_self)))
+	if ((err = psmi_ptl_self.init(ep, self_ptl, &ep->ptl_self)))
 	    goto fail;
     }
     if (psmi_ep_device_is_enabled(ep, PTL_DEVID_IPS)) {
-	if ((err = psmi_ptl_ips.init((const psm_ep_t) ep, ips_ptl,
-				      &ep->ptl_ips)))
+	if ((err = psmi_ptl_ips.init(ep, ips_ptl, &ep->ptl_ips)))
 	    goto fail;
     }
     /* If we're shm-only, this device is enabled above */
     if (psmi_ep_device_is_enabled(ep, PTL_DEVID_AMSH)) {
-	if ((err = psmi_ptl_amsh.init((const psm_ep_t) ep, amsh_ptl,
-				       &ep->ptl_amsh)))
+	if ((err = psmi_ptl_amsh.init(ep, amsh_ptl, &ep->ptl_amsh)))
 	    goto fail;
     }
     else {
@@ -943,8 +956,10 @@ __psm_ep_open_internal(psm_uuid_t const unique_job_key, int *devid_enabled,
     return PSM_OK;
 
 fail:
-    if (ep != NULL)
+    if (ep != NULL) {
+	if (ep->context.fd != -1) close(ep->context.fd);
 	psmi_free(ep);
+    }
     if (epaddr != NULL)
 	psmi_free(epaddr);
     return err;
@@ -958,8 +973,8 @@ __psm_ep_open(psm_uuid_t const unique_job_key, struct psm_ep_open_opts const *op
     psm_mq_t mq;
     psm_epid_t epid;
     psm_ep_t ep, tmp;
-    uint32_t units[IPATH_MAX_RAILS];
-    uint16_t ports[IPATH_MAX_RAILS];
+    uint32_t units[IPATH_MAX_UNIT];
+    uint16_t ports[IPATH_MAX_UNIT];
     int i, num_rails = 0;
     char *uname = "IPATH_UNIT";
     char *pname = "IPATH_PORT";
@@ -994,8 +1009,8 @@ __psm_ep_open(psm_uuid_t const unique_job_key, struct psm_ep_open_opts const *op
 
 	/* If multi-rail is used, set the first ep unit/port */
 	if (num_rails > 0) {
-	    sprintf(uvalue, "%d", units[0]);
-	    sprintf(pvalue, "%d", ports[0]);
+	    snprintf(uvalue, 4, "%1d", units[0]);
+	    snprintf(pvalue, 4, "%1d", ports[0]);
 	    setenv(uname, uvalue, 1);
 	    setenv(pname, pvalue, 1);
 	}
@@ -1022,8 +1037,8 @@ __psm_ep_open(psm_uuid_t const unique_job_key, struct psm_ep_open_opts const *op
 
     if (psmi_device_is_enabled(devid_enabled, PTL_DEVID_IPS)) {
 	for (i = 1; i < num_rails; i++) {
-	    sprintf(uvalue, "%d", units[i]);
-	    sprintf(pvalue, "%d", ports[i]);
+	    snprintf(uvalue, 4, "%1d", units[i]);
+	    snprintf(pvalue, 4, "%1d", ports[i]);
 	    setenv(uname, uvalue, 1);
 	    setenv(pname, pvalue, 1);
 
@@ -1142,7 +1157,7 @@ __psm_ep_close(psm_ep_t ep, int mode, int64_t timeout_in)
 		psmi_opened_endpoint = ep->user_ep_next;
 	    } else {
 		tmp = psmi_opened_endpoint;
-		while (tmp && tmp->user_ep_next != ep) {
+		while (tmp->user_ep_next != ep) {
 		    tmp = tmp->user_ep_next;
 		}
 	        tmp->user_ep_next = ep->user_ep_next;

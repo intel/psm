@@ -350,7 +350,7 @@ struct ipath_user_info {
 	 */
 	__u32 spu_userversion;
 
-	__u32 _spu_unused3; /* kept for compatible layout */
+	__u32 _spu_scif_nodeid; /* used for mic processes */
 
 	/* size of struct base_info to write to */
 	__u32 spu_base_info_size;
@@ -397,6 +397,8 @@ struct ipath_user_info {
 /* CMD 33 is available (used to be to enable backpressure). Removed in IFS 5.1*/
 #define IPATH_CMD_DISARM_BUFS	34	/* disarm send buffers w/ errors */
 #define IPATH_CMD_ACK_EVENT     35	/* ack & clear bits *spi_sendbuf_status */
+/* MIC to setup memory with mic driver */
+#define IPATH_CMD_MIC_MEM_INFO	41	/* mic memory setup operation */
 
 /*
  * IPATH_CMD_ACK_EVENT obsoletes IPATH_CMD_DISARM_BUFS, but we keep it for
@@ -411,7 +413,37 @@ struct ipath_user_info {
 #define IPATH_EVENT_LID_CHANGE		(1ULL << 2)
 #define IPATH_EVENT_LMC_CHANGE		(1ULL << 3)
 #define IPATH_EVENT_SL2VL_CHANGE	(1ULL << 4)
- 
+
+/*
+ * The following ipath commands are only used for mic system to send
+ * commands to host daemon. All commands above are also used by mic.
+ */
+#define IPATH_CMD_CONTEXT_OPEN		51	/* open a context */
+#define IPATH_CMD_CONTEXT_CLOSE		52	/* close a context */
+
+#define IPATH_CMD_GET_NUM_UNITS		61	/* number of hca units */
+#define IPATH_CMD_GET_NUM_CTXTS		62	/* number of contexts */
+#define IPATH_CMD_GET_PORT_LID		63	/* port lid */
+#define IPATH_CMD_GET_PORT_GID		64	/* port gid */
+#define IPATH_CMD_GET_PORT_LMC		65	/* port lmc */
+#define IPATH_CMD_GET_PORT_RATE		66	/* port rate */
+#define IPATH_CMD_GET_PORT_S2V		67	/* port sl2vl */
+
+#define IPATH_CMD_GET_STATS_NAMES	68	/* stats names */
+#define IPATH_CMD_GET_STATS		69	/* stats */
+#define IPATH_CMD_GET_CTRS_UNAMES	70	/* counters unit names */
+#define IPATH_CMD_GET_CTRS_UNIT		71	/* counters unit */
+#define IPATH_CMD_GET_CTRS_PNAMES	72	/* counters port names */
+#define IPATH_CMD_GET_CTRS_PORT		73	/* counters port */
+
+#define IPATH_CMD_GET_CC_SETTINGS	74	/* get cc settings */
+#define IPATH_CMD_GET_CC_TABLE		75	/* get cc table */
+
+/* cmd for diag code */
+#define IPATH_CMD_WAIT_FOR_PACKET       76
+#define IPATH_CMD_GET_UNIT_FLASH        77
+#define IPATH_CMD_PUT_UNIT_FLASH        78
+
 /*
  * Poll types
  */
@@ -446,9 +478,38 @@ struct ipath_tid_info {
 	__u64 tidmap;
 };
 
+/*
+ * To send general info between PSM on mic and psmd on host.
+ * this structure should be not more that "structure ipath_user_info".
+ */
+struct ipath_mic_info {
+	int unit;		/* unit number */
+	int port;		/* port number */
+	int data1;		/* return data or -1 */
+	int data2;		/* errno if data1=-1 */
+	__u64 data3;		/* other data */
+	__u64 data4;		/* other data */
+} __attribute__ ((aligned(8)));
+
+/*
+ * PSM tells mic driver how to operate memores. flags:
+ * 0x1: map remote host buffer, offset is the SCIF offset
+ * 0x2: allocate knx memory in kernel.
+ * 0x4: allocate physically contiguous knx memory in kernel.
+ * 0x8: SCIF register knx memory, and copy offset to first 8 bytes.
+ */
+struct ipath_mem_info {
+        uint32_t        key;            /* key to match mmap offset */
+        uint32_t        flags;          /* flags indicate what to do */
+        size_t          length;         /* buffer length in bytes */
+        off_t           offset;         /* remotely registerd offset */
+};
+
 struct ipath_cmd {
 	__u32 type;			/* command type */
 	union {
+		struct ipath_mem_info mem_info;	/* mic memory */
+		struct ipath_mic_info mic_info;
 		struct ipath_tid_info tid_info;
 		struct ipath_user_info user_info;
 		/* send dma inflight/completion counter */
@@ -615,6 +676,7 @@ struct ipath_flash {
 
 #define INFINIPATH_MAX_SUBCONTEXT	4
 
+#define IPATH_MAX_UNIT  4 /* max units supported */
 #define IPATH_MAX_PORT	2 /* no boards have more than 2 IB ports */
 
 /* SendPIO per-buffer control */

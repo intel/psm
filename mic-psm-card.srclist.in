@@ -1,0 +1,6 @@
+/etc/sysconfig/mic/conf.d/psm.conf
+%PREFIX%/psm.filelist
+%LIBPREFIX%/libinfinipath.so.%IPATHMAJOR%
+%LIBPREFIX%/libinfinipath.so.%IPATHMAJOR%.%IPATHMINOR%
+%LIBPREFIX%/libpsm_infinipath.so.%PSMMAJOR%
+%LIBPREFIX%/libpsm_infinipath.so.%PSMMAJOR%.%PSMMINOR%

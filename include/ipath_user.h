@@ -61,6 +61,7 @@
 #include "ipath_common.h"
 #include "ipath_byteorder.h"
 #include "ipath_udebug.h"
+#include "ipath_service.h"
 
 // interval timing routines
 // Convert a count of cycles to elapsed nanoseconds
@@ -143,34 +144,9 @@ struct _ipath_ctrl {
 struct _ipath_ctrl *ipath_userinit(int32_t, struct ipath_user_info *,
 				   struct ipath_base_info *b);
 
-// Given the unit number and port, return an error, or the corresponding LID
-// Returns an int, so -1 indicates an error.  0 indicates that
-// the unit is valid, but no LID has been assigned.
-int ipath_get_port_lid(uint16_t, uint16_t);
-
-// Given the unit number and port, return an error, or the corresponding GID
-// Returns an int, so -1 indicates an error.
-int ipath_get_port_gid(uint16_t, uint16_t, uint64_t *hi, uint64_t *lo);
-
-// Given the unit number, return an error, or the corresponding LMC value
-// for the port
-// Returns an int, so -1 indicates an error.  0
-int ipath_get_port_lmc(uint16_t unit, uint16_t port);
-
-// Given the unit number, return an error, or the corresponding link rate
-// for the port
-// Returns an int, so -1 indicates an error. 
-int ipath_get_port_rate(uint16_t unit, uint16_t port);
-
-// Given a unit, port and SL, return an error, or the corresponding VL for the
-// SL as programmed by the SM
-// Returns an int, so -1 indicates an error.
-int ipath_get_port_sl2vl(uint16_t unit, uint16_t port, uint8_t sl);
-
-// get the number of units supported by the driver.  Does not guarantee
-// that a working chip has been found for each possible unit #.  Returns
-// -1 with errno set, or number of units >=0 (0 means none found).
-int ipath_get_num_units(void);
+// don't inline these; it's all init code, and not inlining makes the
+// overall code shorter and easier to debug
+void ipath_touch_mmap(void *, size_t) __attribute__ ((noinline));
 
 int32_t ipath_update_tid_err(void);	// handle update tid errors out of line
 int32_t ipath_free_tid_err(void);	// handle free tid errors out of line
@@ -234,16 +210,9 @@ int ipath_check_unit_status(struct _ipath_ctrl *ctrl);
 // Statistics maintained by the driver
 const char * infinipath_get_next_name(char **names);
 uint64_t infinipath_get_single_stat(const char *attr, uint64_t *s);
-int infinipath_get_stats(uint64_t *, int);
-int infinipath_get_stats_names(char **namep);
 int infinipath_get_stats_names_count(void);
 // Counters maintained in the chip, globally, and per-prot
-int infinipath_get_ctrs_unit(int unitno, uint64_t *, int);
-int infinipath_get_ctrs_unit_names(int unitno, char **namep);
 int infinipath_get_ctrs_unit_names_count(int unitno);
-
-int infinipath_get_ctrs_port(int unitno, int port, uint64_t *, int);
-int infinipath_get_ctrs_port_names(int unitno, char **namep);
 int infinipath_get_ctrs_port_names_count(int unitno);
 
 uint64_t infinipath_get_single_unitctr(int unit, const char *attr, uint64_t *s);
@@ -285,6 +254,8 @@ struct ipath_pio_params {
 // in which they are filled, and writes partially filled buffers in increasing
 // address order (assuming they are filled that way).
 // The arguments are pio buffer address, payload length, header, and payload
+void ipath_write_pio_vector(volatile uint32_t *, const struct ipath_pio_params *,
+	void *, void *);  
 void ipath_write_pio(volatile uint32_t *, const struct ipath_pio_params *,
 	void *, void *);  
 void ipath_write_pio_force_order(volatile uint32_t *,
@@ -303,6 +274,11 @@ void ipath_write_pio_special_trigger4k(volatile uint32_t *,
  * This is not safe to use for PIO routines where we want a guarantee that a 
  * byte is only copied/moved across the bus once.
  */
+#ifdef __MIC__
+void *ipath_mic_vectorcpy_64a(volatile void *dest, const void *src);
+void *ipath_mic_vectorcpy(volatile void *dest, const void *src, uint32_t);
+void *ipath_mic_vectorpio(volatile void *dest, const void *src, uint32_t);
+#endif
 void ipath_dwordcpy(volatile uint32_t *dest, const uint32_t * src, uint32_t ndwords);
 
 /*
@@ -484,7 +460,7 @@ static int32_t __inline__ ipath_update_tid(struct _ipath_ctrl *ctrl,
 	cmd.cmd.tid_info.tidlist = tidlist;	// driver copies tids back directly to this
 	cmd.cmd.tid_info.tidvaddr = vaddr;	// base address for this send to map
 	cmd.cmd.tid_info.tidmap = tidmap;	// driver copies directly to this
-	if (write(ctrl->spc_dev.spd_fd, &cmd, sizeof(cmd)) == -1)
+	if (ipath_cmd_write(ctrl->spc_dev.spd_fd, &cmd, sizeof(cmd)) == -1)
 		return ipath_update_tid_err();
 	return 0;
 }
@@ -498,7 +474,7 @@ static int32_t __inline__ ipath_free_tid(struct _ipath_ctrl *ctrl,
 
 	cmd.cmd.tid_info.tidcnt = tidcnt;
 	cmd.cmd.tid_info.tidmap = tidmap;	// driver copies from this
-	if (write(ctrl->spc_dev.spd_fd, &cmd, sizeof(cmd)) == -1)
+	if (ipath_cmd_write(ctrl->spc_dev.spd_fd, &cmd, sizeof(cmd)) == -1)
 		return ipath_free_tid_err();
 	return 0;
 }
@@ -554,49 +530,5 @@ int ipathd_reset_hardware(uint32_t);
 
 int ipath_hideous_ioctl_emulator(int unit, int reqtype,
 				 struct ipath_eeprom_req *req);
-
-/* sysfs helper routines (only those currently used are exported;
- * try to avoid using others) */
-
-/* base name of path (without unit #) for qib driver */
-#define QIB_CLASS_PATH "/sys/class/infiniband/qib"
-
-/* read a signed 64-bit quantity, in some arbitrary base */
-int ipath_sysfs_read_s64(const char *attr, int64_t *valp, int base);
-
-/* read a string value */
-int ipath_sysfs_port_read(uint32_t unit, uint32_t port, const char *attr,
-			  char **datap);
-
-/* open attribute in unit's sysfs directory via open(2) */
-int ipath_sysfs_unit_open(uint32_t unit, const char *attr, int flags);
-/* print to attribute in {unit,port} sysfs directory */
-int ipath_sysfs_port_printf(uint32_t unit, uint32_t port, const char *attr,
-			    const char *fmt, ...)
-  __attribute__((format(printf, 4, 5)));
-int ipath_sysfs_unit_printf(uint32_t unit, const char *attr,
-			    const char *fmt, ...)
-  __attribute__((format(printf, 3, 4)));
-
-int ipath_ipathfs_unit_write(uint32_t unit, const char *attr, const void *data,
-	size_t len);
-/* read up to one page of malloc'ed data (caller must free), returning
-   number of bytes read or -1 */
-int ipath_ipathfs_read(const char *attr, char **datap);
-int ipath_ipathfs_unit_read(uint32_t unit, const char *attr, char **data);
-/* read a signed 64-bit quantity, in some arbitrary base */
-int ipath_sysfs_unit_read_s64(uint32_t unit, const char *attr,
-			      int64_t *valp, int base);
-int ipath_sysfs_port_read_s64(uint32_t unit, uint32_t port, const char *attr,
-			      int64_t *valp, int base);
-/* these read directly into supplied buffer and take a count */
-int ipath_ipathfs_rd(const char *, void *, int);
-int ipath_ipathfs_unit_rd(uint32_t unit, const char *, void *, int);
-
-int ipath_ipathfs_open(const char *relname, int flags);
-
-/* wait for device special file to show up. timeout is in
-   milliseconds, 0 is "callee knows best", < 0 is infinite. */
-int ipath_wait_for_device(const char *path, long timeout);
 
 #endif				// _IPATH_USER_H

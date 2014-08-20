@@ -36,6 +36,16 @@
 #define _PTL_FWD_AMSH_H
 
 #define PTL_AMSH_MAX_LOCAL_PROCS   256
+
+/* SCIF manual says it is optimized for up to 8 nodes, so choose 16 for
+   future expansion. */
+#ifdef PSM_HAVE_SCIF
+#define PTL_AMSH_MAX_LOCAL_NODES   8
+#else
+/* Compiling without SCIF: assume one node */
+#define PTL_AMSH_MAX_LOCAL_NODES   1
+#endif
+
 /* Symbol in am ptl */
 struct ptl_ctl_init psmi_ptl_amsh;
 

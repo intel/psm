@@ -1,0 +1,4 @@
+/usr/include/psm.h
+/usr/include/psm_mq.h
+%LIBPREFIX%/libinfinipath.so
+%LIBPREFIX%/libpsm_infinipath.so

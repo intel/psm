@@ -87,6 +87,7 @@ ipath_sighdlr(int sig, siginfo_t *p1, void *ucv)
     static void *backaddr[128]; // avoid stack usage
     static char buf[150], hname[64], fname[128];
     static int i, j, fd, id;
+    static int write_result __unused__;
     extern char *__progname;
 
     // If this is a SIGINT do not display backtrace. Just invoke exit handlers
@@ -111,7 +112,7 @@ ipath_sighdlr(int sig, siginfo_t *p1, void *ucv)
 #endif
     }
     id += snprintf(buf+id, sizeof buf-id, ".  Backtrace:\n");
-    (void)write(2, buf, id);
+    write_result = write(2, buf, id);
 
     i = backtrace(backaddr, sizeof(backaddr)/sizeof(backaddr[0]));
     if(i>2) // skip ourselves and backtrace
@@ -131,7 +132,7 @@ ipath_sighdlr(int sig, siginfo_t *p1, void *ucv)
     hname[sizeof(hname) - 1] = '\0';
     snprintf(fname, sizeof fname, "%s.80s-%u,%.32s.btr", __progname, getpid(), hname);
     if((fd=open(fname, O_CREAT|O_WRONLY, 0644))>=0) {
-        (void)write(fd, buf, id);
+        write_result = write(fd, buf, id);
         backtrace_symbols_fd(backaddr+j,  i, fd);
         (void)fsync(fd);
         (void)close(fd);

@@ -70,6 +70,9 @@ typedef struct psmi_handlertab {
 /* If no kernel assisted copy is available this is the rendezvous threshold */
 #define PSMI_MQ_RV_THRESH_NO_KASSIST 16000
 
+/* Threshold for using SCIF DMA to do data transfers */
+#define PSMI_MQ_RV_THRESH_SCIF_DMA  (150000)
+
 #define PSMI_AM_CONN_REQ    1
 #define PSMI_AM_CONN_REP    2
 #define PSMI_AM_DISC_REQ    3
@@ -83,14 +86,21 @@ typedef struct psmi_handlertab {
 
 #define PSMI_KASSIST_KCOPY     0x3
 #define PSMI_KASSIST_KNEM      0xC
-#define PSMI_KASSIST_GET       0x5
-#define PSMI_KASSIST_PUT       0xA
-#define PSMI_KASSIST_MASK      0xF
+#define PSMI_KASSIST_GET       0x15
+#define PSMI_KASSIST_PUT       0x2A
+#define PSMI_KASSIST_MASK      0x3F
 
 #define PSMI_KASSIST_MODE_DEFAULT PSMI_KASSIST_KNEM_PUT
 #define PSMI_KASSIST_MODE_DEFAULT_STRING  "knem-put"
 
 int psmi_epaddr_kcopy_pid(psm_epaddr_t epaddr);
+
+#define PSMI_SCIF_DMA_OFF   0x0
+#define PSMI_SCIF_DMA_GET   0x1
+#define PSMI_SCIF_DMA_PUT   0x2
+
+#define PSMI_SCIF_DMA_MODE_DEFAULT PSMI_SCIF_DMA_GET
+#define PSMI_SCIF_DMA_MODE_DEFAULT_STRING  "scif-get"
 
 /*
  * Eventually, we will allow users to register handlers as "don't reply", which
@@ -219,7 +229,12 @@ void psmi_am_reqq_add(int amtype, ptl_t *ptl, psm_epaddr_t epaddr,
 #ifdef __powerpc__
 #  define _QMARK_FLAG_FENCE()  asm volatile("lwsync" : : : "memory")
 #elif defined(__x86_64__) || defined(__i386__)
-#  define _QMARK_FLAG_FENCE()  asm volatile("" : : : "memory")  /* compilerfence */
+#ifdef __MIC__
+#  define _QMARK_FLAG_FENCE()  asm volatile("lock; addl $0,0(%%rsp)" ::: "memory");
+#else
+#  define _QMARK_FLAG_FENCE()  asm volatile("sfence" : : : "memory");
+//#  define _QMARK_FLAG_FENCE()  asm volatile("" : : : "memory")  /* compilerfence */
+#endif
 #else
 #  error No _QMARK_FLAG_FENCE() defined for this platform
 #endif
@@ -227,6 +242,7 @@ void psmi_am_reqq_add(int amtype, ptl_t *ptl, psm_epaddr_t epaddr,
 #define _QMARK_FLAG(pkt_ptr, _flag)      do {    \
         _QMARK_FLAG_FENCE();                     \
         (pkt_ptr)->flag = (_flag);               \
+        _QMARK_FLAG_FENCE();                     \
         } while (0)
 
 #define QMARKFREE(pkt_ptr)  _QMARK_FLAG(pkt_ptr, QFREE)
@@ -288,7 +304,7 @@ struct am_pkt_short {
     /* We eventually will expose up to 8 arguments, but this isn't implemented
      * For now.  >6 args will probably require a medium instead of a short */
 }
-am_pkt_short_t;
+am_pkt_short_t PSMI_CACHEALIGN;
 PSMI_STRICT_SIZE_DECL(am_pkt_short_t,64);
 
 typedef struct am_pkt_bulk {
@@ -313,11 +329,10 @@ typedef struct am_ctl_qhdr {
     uint32_t    head;		/* Touched only by 1 consumer */
     uint8_t	_pad0[64-4];
 
-    pthread_spinlock_t  lock;
-    uint32_t    tail;		/* XXX candidate for fetch-and-incr */
+    /* tail is now located on the dirpage. */
     uint32_t    elem_cnt;
     uint32_t    elem_sz;
-    uint8_t     _pad1[64-3*4-sizeof(pthread_spinlock_t)];
+    uint8_t     _pad1[64-2*sizeof(uint32_t)];
 }
 am_ctl_qhdr_t;
 PSMI_STRICT_SIZE_DECL(am_ctl_qhdr_t,128);
@@ -345,16 +360,30 @@ typedef struct am_ctl_qshort_cache {
 }
 am_ctl_qshort_cache_t;
 
+struct amsh_qptrs {
+    am_ctl_blockhdr_t	*qreqH;
+    am_pkt_short_t	*qreqFifoShort;
+    am_pkt_bulk_t  	*qreqFifoMed;
+    am_pkt_bulk_t  	*qreqFifoLong;
+    am_pkt_bulk_t  	*qreqFifoHuge;
+
+    am_ctl_blockhdr_t	*qrepH;
+    am_pkt_short_t	*qrepFifoShort;
+    am_pkt_bulk_t  	*qrepFifoMed;
+    am_pkt_bulk_t  	*qrepFifoLong;
+    am_pkt_bulk_t  	*qrepFifoHuge;
+};
+
 /******************************************
  * Shared segment local directory (global)
  ******************************************
  *
  * Each process keeps a directory for where request and reply structures are 
- * located at its peers.  This directory must be re-initialized every time the 
- * shared segment moves in the VM, and the segment moves every time we remap()
- * for additional memory.
+ * located at its peers.
  */
 struct amsh_qdirectory {
+    /* These pointers are convenience aliases for the local node queues
+       also found in the qptrs array. */
     am_ctl_blockhdr_t	*qreqH;
     am_pkt_short_t	*qreqFifoShort;
     am_pkt_bulk_t  	*qreqFifoMed;
@@ -367,8 +396,46 @@ struct amsh_qdirectory {
     am_pkt_bulk_t  	*qrepFifoLong;
     am_pkt_bulk_t  	*qrepFifoHuge;
 
+    struct amsh_qptrs   qptrs[PTL_AMSH_MAX_LOCAL_NODES];
+
     int			kassist_pid;
+
+/*
+ * Peer view of my index. for initial node, it is the same as ep->amsh_shmidx,
+ * for other remote nodes, it is calculated by circular offset of
+ * PTL_AMSH_MAX_LOCAL_PROCS, node-ID, and ep->amsh_shmidx.
+ */
+    int			amsh_shmidx;
+    psm_epid_t		amsh_epid;
+    uint16_t		amsh_verno;
+#ifdef PSM_HAVE_SCIF
+    scif_epd_t		amsh_epd[2];
+#endif
+    off_t               amsh_offset;
+    void		*amsh_base;
+    psm_epaddr_t	amsh_epaddr;
 } __attribute__ ((aligned(8)));
+
+typedef struct amsh_qtail_info
+{
+    volatile uint32_t tail;
+    volatile pthread_spinlock_t  lock;
+    uint8_t  _pad0[64-1*4-sizeof(pthread_spinlock_t)];
+} amsh_qtail_info_t;
+PSMI_STRICT_SIZE_DECL(amsh_qtail_info_t,64);
+
+struct amsh_qtail
+{
+    amsh_qtail_info_t reqFifoShort;
+    amsh_qtail_info_t reqFifoMed;
+    amsh_qtail_info_t reqFifoLong;
+    amsh_qtail_info_t reqFifoHuge;
+
+    amsh_qtail_info_t repFifoShort;
+    amsh_qtail_info_t repFifoMed;
+    amsh_qtail_info_t repFifoLong;
+    amsh_qtail_info_t repFifoHuge;
+} __attribute__ ((aligned(64)));
 
 /* The first shared memory page is a control page to support each endpoint
  * independently adding themselves to the shared memory segment. */
@@ -386,11 +453,21 @@ struct am_ctl_dirpage {
     psm_epid_t      shmidx_map_epid[PTL_AMSH_MAX_LOCAL_PROCS];
     int		    kcopy_minor;
     int		    kassist_pids[PTL_AMSH_MAX_LOCAL_PROCS];
+
+    /* A set of tail queue data for each remote domain.  Each domain has
+       a reserved set of queues for each other domain.  The queues are located
+       in shared memory on the target domain, while the tail pointer is
+       located on the source domain. */
+    /* The tail pointers are located in the dirpage because each peer in this
+       domain will be sharing them (atomically).  The dirpage is mapped by
+       all processes already, so just use it. */
+    struct amsh_qtail qtails[PTL_AMSH_MAX_LOCAL_PROCS*PTL_AMSH_MAX_LOCAL_NODES];
 };
 
 #define AMSH_HAVE_KCOPY	0x01
 #define AMSH_HAVE_KNEM  0x02
-#define AMSH_HAVE_KASSIST 0x3
+#define AMSH_HAVE_SCIF  0x04
+#define AMSH_HAVE_KASSIST 0x7
 
 /******************************************
  * Shared fifo element counts and sizes
@@ -427,9 +504,8 @@ struct ptl {
     psm_epaddr_t	   epaddr;
     ptl_ctl_t              *ctl;
     int                    shmidx; 
-    am_ctl_qshort_cache_t  reqH;
-    am_ctl_qshort_cache_t  repH;
-    psm_epaddr_t	   shmidx_map_epaddr[PTL_AMSH_MAX_LOCAL_PROCS];
+    am_ctl_qshort_cache_t  reqH[PTL_AMSH_MAX_LOCAL_NODES];
+    am_ctl_qshort_cache_t  repH[PTL_AMSH_MAX_LOCAL_NODES];
     int                    zero_polls;
     int                    amsh_only_polls;
 

@@ -181,6 +181,11 @@ ips_none_get_path_rec(struct ips_proto *proto,
     elid.key = psmi_calloc(proto->ep, UNDEFINED, 1, strlen(eplid) + 1);
     path_rec = (ips_path_rec_t*) 
       psmi_calloc(proto->ep, UNDEFINED, 1, sizeof(ips_path_rec_t));
+    if (!elid.key || !path_rec) {
+	if (elid.key) psmi_free(elid.key);
+	if (path_rec) psmi_free(path_rec);
+	return PSM_NO_MEMORY;
+    }
     
     /* Create path record */
     path_rec->epr_slid = slid;
@@ -199,6 +204,8 @@ ips_none_get_path_rec(struct ips_proto *proto,
 
     /* Setup CCA parameters for path */
     if (path_rec->epr_sl > 15) {
+	psmi_free(elid.key);
+	psmi_free(path_rec);
 	return PSM_INTERNAL_ERR;
     }
     if (!(proto->ccti_ctrlmap&(1<<path_rec->epr_sl))) {
@@ -509,7 +516,7 @@ psm_error_t ips_ibta_init(struct ips_proto *proto)
     union psmi_envvar_val ccti_incr;
     union psmi_envvar_val ccti_timer;
     union psmi_envvar_val ccti_size;
-    int i, fd;
+    int i;
     char ccabuf[256];
     uint8_t *p;
 
@@ -524,18 +531,9 @@ psm_error_t ips_ibta_init(struct ips_proto *proto)
  * Check qib driver CCA setting, and try to use it if available.
  * Fall to self CCA setting if errors.
  */
-    sprintf(ccabuf,
-	"/sys/class/infiniband/qib%d/ports/%d/CCMgtA/cc_settings_bin",
-	proto->ep->context.base_info.spi_unit,
-	proto->ep->context.base_info.spi_port);
-    fd = open(ccabuf, O_RDONLY);
-    if (fd < 0) {
-	goto selfcca;
-    }
-    /* (16+16+640)/8=84 */
-    if (read(fd, ccabuf, 84) != 84) {
-	_IPATH_CCADBG("Read cc_settings_bin failed. using static CCA\n");
-	close(fd);
+    i = ipath_get_cc_settings_bin(proto->ep->context.base_info.spi_unit,
+		proto->ep->context.base_info.spi_port, ccabuf);
+    if (i <= 0) {
 	goto selfcca;
     }
     p = (uint8_t *)ccabuf;
@@ -549,44 +547,16 @@ psm_error_t ips_ibta_init(struct ips_proto *proto)
 	proto->cace[i].ccti_threshold = *p; p++;
 	proto->cace[i].ccti_min = *p; p++;
     }
-    close(fd);
 
-    sprintf(ccabuf,
-	"/sys/class/infiniband/qib%d/ports/%d/CCMgtA/cc_table_bin",
-	proto->ep->context.base_info.spi_unit,
-	proto->ep->context.base_info.spi_port);
-    fd = open(ccabuf, O_RDONLY);
-    if (fd < 0) {
-	_IPATH_CCADBG("Open cc_table_bin failed. using static CCA\n");
-	goto selfcca;
-    }
-    if ((i = read(fd, &proto->ccti_limit, 2)) != 2) {
-	_IPATH_CCADBG("Read ccti_limit failed. using static CCA\n");
-	close(fd);
-	goto selfcca;
-    }
-    if (proto->ccti_limit < 63) {
-	_IPATH_CCADBG("Read ccti_limit %d less than 63. "
-	    "using static CCA\n", proto->ccti_limit);
-	close(fd);
-	goto selfcca;
-    }
-    proto->cct = psmi_calloc(proto->ep, UNDEFINED,
-	proto->ccti_limit+1, sizeof(uint16_t));
-    if (!proto->cct) {
-	close(fd);
+    i = ipath_get_cc_table_bin(proto->ep->context.base_info.spi_unit,
+		proto->ep->context.base_info.spi_port, &proto->cct);
+    if (i < 0) {
 	err = PSM_NO_MEMORY;
 	goto fail;
-    }
-    i = (proto->ccti_limit+1)*sizeof(uint16_t);
-    if (read(fd, proto->cct, i) != i) {
-	_IPATH_CCADBG("Read ccti_entry_list, using static CCA\n");
-	psmi_free(proto->cct);
-	proto->cct = NULL;
-	close(fd);
+    } else if (i == 0) {
 	goto selfcca;
     }
-    close(fd);
+    proto->ccti_limit = i;
     proto->ccti_size = proto->ccti_limit + 1;
     goto finishcca;
 

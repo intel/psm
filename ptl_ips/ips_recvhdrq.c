@@ -392,7 +392,6 @@ PSMI_ALWAYS_INLINE(
 void
 process_pending_acks(struct ips_recvhdrq *recvq))
 {
-  
   /* If any pending acks, dispatch them now */
   while (!SLIST_EMPTY(&recvq->pending_acks)) {
     struct ips_flow *flow = SLIST_FIRST(&recvq->pending_acks);
@@ -404,14 +403,14 @@ process_pending_acks(struct ips_recvhdrq *recvq))
       psmi_assert_always((flow->flags & IPS_FLOW_FLAG_PENDING_NAK) == 0);
       
       flow->flags &= ~IPS_FLOW_FLAG_PENDING_ACK;
-      (void)ips_proto_send_ctrl_message(flow, OPCODE_ACK,
+      ips_proto_send_ctrl_message(flow, OPCODE_ACK, 
 					&flow->ipsaddr->ctrl_msg_queued, NULL);
     }
     else {
       psmi_assert_always(flow->flags & IPS_FLOW_FLAG_PENDING_NAK);
       
       flow->flags &= ~IPS_FLOW_FLAG_PENDING_NAK;
-      (void)ips_proto_send_ctrl_message(flow, OPCODE_NAK,
+      ips_proto_send_ctrl_message(flow, OPCODE_NAK, 
 					&flow->ipsaddr->ctrl_msg_queued, NULL);
     }
     
@@ -492,7 +491,8 @@ ips_recvhdrq_progress(struct ips_recvhdrq *recvq)
 	rcv_ev.has_cksum = 
 	  ((recvq->proto->flags & IPS_PROTO_FLAG_CKSUM) &&
 	   (rcv_ev.ptype == RCVHQ_RCV_TYPE_EAGER) &&
-	   (rcv_ev.p_hdr->mqhdr != MQ_MSG_DATA_BLK));
+	   (rcv_ev.p_hdr->mqhdr != MQ_MSG_DATA_BLK) &&
+	   (rcv_ev.p_hdr->mqhdr != MQ_MSG_DATA_REQ_BLK));
 	
 	if_pt (recvq->proto->flags & IPS_PROTO_FLAG_CCA) {
 	  /* IBTA CCA handling:
