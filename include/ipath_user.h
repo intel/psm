@@ -274,11 +274,6 @@ void ipath_write_pio_special_trigger4k(volatile uint32_t *,
  * This is not safe to use for PIO routines where we want a guarantee that a 
  * byte is only copied/moved across the bus once.
  */
-#ifdef __MIC__
-void *ipath_mic_vectorcpy_64a(volatile void *dest, const void *src);
-void *ipath_mic_vectorcpy(volatile void *dest, const void *src, uint32_t);
-void *ipath_mic_vectorpio(volatile void *dest, const void *src, uint32_t);
-#endif
 void ipath_dwordcpy(volatile uint32_t *dest, const uint32_t * src, uint32_t ndwords);
 
 /*

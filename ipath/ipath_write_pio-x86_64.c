@@ -163,19 +163,19 @@ void ipath_write_pio_vector(volatile uint32_t *piob,  const struct ipath_pio_par
 
 #ifdef PSM_DEBUG
     if (((uint64_t)piob) & 63) {
-	_IPATH_ERROR("ipath_mic_vectorpio(): piob not 64byte aligned\n");
+	_IPATH_ERROR("ipath_write_pio_vector(): piob not 64byte aligned\n");
 	return;
     }
     if (((uint64_t)pbc) & 63) {
-	_IPATH_ERROR("ipath_mic_vectorpio(): pbc not 64byte aligned\n");
+	_IPATH_ERROR("ipath_write_pio_vector(): pbc not 64byte aligned\n");
 	return;
     }
 #endif
-    ipath_mic_vectorpio(piob, pbc, IPATH_MESSAGE_HDR_SIZE+8);
+    memcpy((uint32_t *)piob, pbc, IPATH_MESSAGE_HDR_SIZE+8);
     piob += (IPATH_MESSAGE_HDR_SIZE >> 2) + 2;
 
     if(pioparm->length) 
-      ipath_mic_vectorpio(piob, (uint32_t*)bdata, pioparm->length);
+      memcpy((uint32_t *)piob, (uint32_t*)bdata, pioparm->length);
 
     /* If checksum is enabled insert CRC at end of packet */
     if_pf (pioparm->cksum_is_valid){
@@ -255,7 +255,7 @@ void ipath_write_pio(volatile uint32_t *piob,  const struct ipath_pio_params *pi
  * here we trigger on a "special" address, so just bang it out
  * as fast as possible...
  */
-static void 
+static inline void 
 ipath_write_pio_special_trigger(volatile uint32_t *piob,
 		const struct ipath_pio_params *pioparm,
 		void *hdr, void *bdata, unsigned offset)

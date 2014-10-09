@@ -2200,7 +2200,7 @@ am_send_pkt_short(ptl_t *ptl, uint32_t destidx, uint32_t bulkidx,
     lcl_pkt.flag = QREADY;
 
     /* Now copy the local packet data to the remote packet. */
-    ipath_mic_vectorcpy_64a((void*)pkt, &lcl_pkt);
+    memcpy((void*)pkt, &lcl_pkt, sizeof(am_pkt_short_t));
 
 #else
     /* got a free pkt... fill it in */
@@ -2230,8 +2230,8 @@ static char amsh_medscratch[AMMED_SZ];
 #endif
 
 #ifdef __MIC__
-#define amsh_shm_copy_short ipath_mic_vectorcpy
-#define amsh_shm_copy_long  ipath_mic_vectorcpy
+#define amsh_shm_copy_short memcpy
+#define amsh_shm_copy_long  memcpy
 #define amsh_shm_copy_huge  psmi_memcpyo
 #else
 #define amsh_shm_copy_short psmi_mq_mtucpy

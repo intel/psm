@@ -47,33 +47,40 @@ must also installed. If compiling mic version or mic card version, scif must
 installed on the system. Root privileges are required to install the runtime
 libraries and development header files into standard system location.
 
-There are three mechanisms for building PSM:
+There are two mechanisms for building PSM:
   1. Use provided Makefiles to build and install
-  2. Generate tarballs and install
-  3. Generate rpms and install
+  2. Generate a tarball that can be used to build source and binary RPMs
 
-Get this code, and cd to the top directory where this README file is.
+The instructions below use $PRODUCT and $RELEASE to refer to the product
+and release identifiers of the infinipath-psm RPM.
 
 Building from Makefiles
 -----------------------
-Run make on the command line. This will build the libraries. By default,
-the Makefile will auto-detect whether libuuid and the uuid.h header file
-are installed. If so, it will use the system's libuuid. Otherwise, PSM
-will be compiled with the libuuid included with PSM.
+1. Untar the tarball:
+	$ tar zxvf intel-psm-$PRODUCT-$RELEASE.tar.gz
+2. Change directory into the untarred location:
+	$ cd intel-psm-$PRODUCT-$RELEASE
+3. Run make on the command line. This will build the libraries. By default,
+   the Makefile will auto-detect whether libuuid and the uuid.h header file
+   are installed. If so, it will use the system's libuuid. Otherwise, PSM
+   will be compiled with the libuuid included with PSM.
 	$ make
-To force compiling with the included libuuid, use the USE_PSM_UUID variable:
+
+   The Makefile will attempt to detect if SCIF is present, and if found, it will
+   build the SCIF enabled variant by default.  Auto-detection of SCIF can be
+   disabled by passing the PSM_HAVE_SCIF variable.
+
+   To compile the SCIF-enabled version, set the PSM_HAVE_SCIF variable:
+        $ make PSM_HAVE_SCIF=1
+   To compile the non-SCIF version, even if SCIF is present, clear the variable:
+        $ make PSM_HAVE_SCIF=0
+
+   To force compiling with the included libuuid, use the USE_PSM_UUID variable:
         $ make USE_PSM_UUID=1
 
-Note, Makefile will also auto-detect if scif(/usr/include/scif.h) presents,
-and build either mic version or Xeon version, mic version enables symmetric
-mode to talk to processes on mic card.
-To force compiling Xeon version when scif is installed:
-	$ make PSM_HAVE_SCIF=0
+   (PSM_HAVE_SCIF and USE_PSM_UUID may be used in conjunction)
 
-To compile PSM mic-card version:
-	$ make MIC=1 CC=x86_64-k1om-linux-gcc
-
-Install the libraries and header files on the system (as root):
+4. Install the libraries and header files on the system (as root):
 	$ make install
 
 The libraries will be installed in either /usr/lib or /usr/lib64, depending on
@@ -89,27 +96,34 @@ libraries in "/tmp/psm-install/libraries" and the headers in
 "/tmp/psm-install/usr/include", and "make LIBDIR=/tmp/libs install" will
 install the libraries in "/tmp/libs" and the headers in "/usr/include".
 
-Generating PSM tarballs
------------------------
-1. generate Xeon tarballs:
-	$ make infinipath-tarballs
-2. generate mic-host tarballs (must have scif installed):
-	$ make mic-tarballs
-3. generate mic-card tarballs (must have scif installed):
-	$ make miccard-tarballs
-4. generate all tarballs above (must have scif installed):
-	$ make tarballs
-
 Generating PSM source and binary RPMs
--------------------------------------
-1. generate Xeon rpms:
-	$ make infinipath-rpms
-2. generate mic-host rpms (must have scif installed):
-	$ make mic-rpms
-3. generate mic-card rpms (must have scif installed):
-	$ make miccard-rpms
-4. generate all rpms above (must have scif installed):
-	$ make rpms
+--------------------------------------
+This is a two step process: Generate a PSM distribution tarball which can then
+be used to generate source and binary RPMs using the rpmbuild command with the
+-ta option.
+1. Untar the tarball:
+	$ tar zxvf intel-psm-$PRODUCT-$RELEASE.tar.gz
+2. Change directory into the untarred location:
+	$ cd intel-psm-$PRODUCT-$RELEASE
+3. Generate distribution tarball
+   	$ make dist
+   To force compiling with the included libuuid, use the USE_PSM_UUID variable:
+        $ make dist USE_PSM_UUID=1
+   Note: It is recommended if you are planning on doing cross distribution
+builds to use the included libuuid i.e. If you are generating the distribution
+tarball on a RHEL machine but may use rpmbuild on a SuSE SLES machine. This
+minimized any cross distribution dependencies for the package.
+4. Generate source and binary packages.  
+   To generate a non-SCIF RPM:
+   	$ rpmbuild -ta intel-psm-$PRODUCT-$RELEASE.tar.gz
+   This produces the infinipath-psm-$PRODUCT-$RELEASE set of RPMs.
+   To generate a SCIF-enabled RPM:
+   	$ rpmbuild -ta intel-psm-$PRODUCT-$RELEASE.tar.gz -D 'PSM_HAVE_SCIF 1'
+   This produces the intel-psm-$PRODUCT-$RELEASE set of RPMs.
+
+   Please refere to the man page of rpmbuild for other options in generating
+RPMs. The generated RPMs are relocatable so one can provide the prefix option
+to retarget the installation location.
 
 Please note, in any case, you can build debugging version of the code by
 adding PSM_DEBUG=1 on make command line.

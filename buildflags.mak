@@ -96,7 +96,3 @@ endif
 CFLAGS += $(BASECFLAGS) $(if $(filter $(CC),gcc),-Wno-strict-aliasing) \
 	$(if $(PSM_VALGRIND:0=),-DPSM_VALGRIND,-DNVALGRIND)
 
-.DEFAULT_GOAL := all
-# Dummy install rule for sub-directories that don't install anything
-install:
-	@echo "Nothing to install"

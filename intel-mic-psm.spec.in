@@ -52,7 +52,7 @@ Requires(postun): /sbin/ldconfig
 @REQUIRES@
 
 %package devel
-Summary: Development files for QLogic PSM
+Summary: Development files for Intel PSM
 Group: System Environment/Development
 Requires: %{name} = %{version}-%{release}
 Provides: %{name}-devel = %{version}
@@ -66,6 +66,65 @@ Requires(post): /sbin/ldconfig
 Requires(postun): /sbin/ldconfig
 @REQUIRES-DEVEL@
 
+
+%package -n infinipath-psm
+Summary: QLogic PSM Libraries
+Epoch: 4
+License: GPL
+Group: System Environment/Libraries
+URL: http://www.qlogic.com/
+Prefix: /usr
+Provides: infinipath-psm = %{version}
+Conflicts: infinipath-libs intel-mic-psm
+Requires(post): /sbin/ldconfig
+Requires(postun): /sbin/ldconfig
+@REQUIRES@
+
+%package -n infinipath-psm-devel
+Summary: Development files for Intel PSM
+Group: System Environment/Development
+Requires: infinipath-psm = %{version}-%{release}
+Provides: infinipath-psm-devel = %{version}
+# ifs package
+Obsoletes: infinipath-devel <= %{version}-%{release}
+Conflicts: infinipath-devel <= %{version}-%{release}
+# mpss package
+Obsoletes: mpss-psm-dev <= %{version}-%{release}
+Conflicts: mpss-psm-dev <= %{version}-%{release}
+Requires(post): /sbin/ldconfig
+Requires(postun): /sbin/ldconfig
+@REQUIRES-DEVEL@
+
+# %package card-devel
+# Summary: Development files for Intel Xeon Phi
+# Group: System Environment/Development
+# Requires: %{name} = %{version}-%{release}
+# Requires(post): /sbin/ldconfig
+# Requires(postun): /sbin/ldconfig
+
+
+%global debug_package %{nil}
+
+#%{!?install_prefix:%define install_prefix /usr}
+#PSM_HAVE_SCIF is one of: 0 1
+%{!?PSM_HAVE_SCIF:     %global PSM_HAVE_SCIF 0}
+
+%define INFINIPATH_MAKEARG PSM_HAVE_SCIF=0 MIC=0
+%define INTEL_MAKEARG PSM_HAVE_SCIF=1 MIC=0
+%define INTEL_CARD_MAKEARG PSM_HAVE_SCIF=1 MIC=1 LOCAL_PREFIX=/opt/intel/mic/psm
+%define card_prefix /opt/intel/mic/psm
+
+%if "%{PSM_HAVE_SCIF}" == "0"
+  %define MAKEARG PSM_HAVE_SCIF=0 MIC=0
+%else
+  %if "%{PSM_HAVE_SCIF}" == "1"
+    %define MAKEARG PSM_HAVE_SCIF=1 MIC=0
+  %else
+    %define MAKEARG PSM_HAVE_SCIF=0 MIC=0
+    %define PSM_HAVE_SCIF "1"
+  %endif
+%endif
+
 %description
 The PSM Messaging API, or PSM API, is Intel's low-level
 user-level communications interface for the True Scale
@@ -76,17 +135,29 @@ interfaces in parallel environments.
 %description devel
 Development files for the libpsm_infinipath library
 
+%description -n infinipath-psm
+The PSM Messaging API, or PSM API, is QLogic's low-level
+user-level communications interface for the Truescale
+family of products. PSM users are enabled with mechanisms
+necessary to implement higher level communications
+interfaces in parallel environments.
+
+%description -n infinipath-psm-devel
+Development files for the libpsm_infinipath library
+
 %prep
 %setup -q -n %{name}-%{version}-%{release}
 
 %build
-%{__make} @PSM_UUID@
+%{__make} @PSM_UUID@ %{MAKEARG}
 
 %install
 rm -rf $RPM_BUILD_ROOT
 mkdir -p $RPM_BUILD_ROOT
 export DESTDIR=$RPM_BUILD_ROOT
-%{__make} install
+%{__make} install %{MAKEARG}
+
+
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -96,18 +167,36 @@ rm -rf $RPM_BUILD_ROOT
 %post devel -p /sbin/ldconfig
 %postun devel -p /sbin/ldconfig
 
+%if "%{PSM_HAVE_SCIF}" == "1"
 %files
 %defattr(-,root,root,-)
-/usr/lib64/libpsm_infinipath.so.*
-/usr/lib64/libinfinipath.so.*
+%{install_prefix}/lib64/libpsm_infinipath.so.*
+%{install_prefix}/lib64/libinfinipath.so.*
 /usr/sbin/psmd
 
 %files devel
 %defattr(-,root,root,-)
-/usr/lib64/libpsm_infinipath.so
-/usr/lib64/libinfinipath.so
+%{install_prefix}/lib64/libpsm_infinipath.so
+%{install_prefix}/lib64/libinfinipath.so
 /usr/include/psm.h
 /usr/include/psm_mq.h
+%endif
+
+
+%if "%{PSM_HAVE_SCIF}" == "0"
+%files -n infinipath-psm
+%defattr(-,root,root,-)
+%{install_prefix}/lib64/libpsm_infinipath.so.*
+%{install_prefix}/lib64/libinfinipath.so.*
+
+%files -n infinipath-psm-devel
+%defattr(-,root,root,-)
+%{install_prefix}/lib64/libpsm_infinipath.so
+%{install_prefix}/lib64/libinfinipath.so
+/usr/include/psm.h
+/usr/include/psm_mq.h
+%endif
+
 
 
 %changelog

@@ -68,15 +68,14 @@ IPATH_LIB_MINOR := 0
 MAJOR := $(PSM_LIB_MAJOR)
 MINOR := $(PSM_LIB_MINOR)
 
-# Pacakge version information
 # The desired version number comes from the most recent tag starting with "v"
-TAG_VERSION ?= $(shell if [ -d .git ] ; then git describe --tags --match 'v*' --abbrev=0 2>/dev/null | sed -e 's/^v//' ; fi)
-# The desired release number comes from the most recent tag starting with "r"
-TAG_RELEASE ?= $(shell if [ -d .git ] ; then git describe --tags --match 'r*' --abbrev=0 2>/dev/null | sed -e 's/^r//' ; fi)
-TAG_VERSION := $(if $(TAG_VERSION),$(TAG_VERSION),3.3)
-TAG_RELEASE := $(if $(TAG_RELEASE),$(TAG_RELEASE),0.2)
-VERSION_RELEASE := $(TAG_VERSION)-$(TAG_RELEASE)
+VERSION := $(shell if [ -d .git ] ; then  git  describe --tags --abbrev=0 --match='v*' | sed -e 's/^v//' -e 's/-/_/'; else echo "version" ; fi)
 
+# The desired release number comes the git describe following the version which
+# is the number of commits since the version tag was planted suffixed by the g<commitid>
+RELEASE := $(shell if [ -d .git ] ; then git describe --tags --long --match='v*' | sed -e 's/v[0-9.]*-\(.*\)/\1_open/' -e 's/-/_/'; else echo "release" ; fi)
+
+VERSION_RELEASE := $(VERSION)-$(RELEASE)
 
 # Try to figure out which libuuid to use. This needs to be
 # done before we include buildflags.mak
@@ -168,6 +167,7 @@ clean:
 
 distclean: cleanlinks clean
 	rm -f *.spec *.srclist
+	rm -f *.tar.gz
 
 .PHONY: symlinks
 symlinks:
@@ -209,9 +209,9 @@ tmiclean:
 	$(MAKE) -C contrib/$(TMI_NAME) verbs=PSM clean
 
 
-.PHONY: $(RPM_NAME).spec rpms infinipath-rpm michost-rpm miccard-rpm
-$(RPM_NAME).spec: $(RPM_NAME).spec.in
-	sed -e 's/@VERSION@/'${TAG_VERSION}'/g' -e 's/@RELEASE@/'${TAG_RELEASE}'/g' $< > $@
+.PHONY: intel-mic-psm.spec 
+intel-mic-psm.spec: intel-mic-psm.spec.in
+	sed -e 's/@VERSION@/'${VERSION}'/g' -e 's/@RELEASE@/'${RELEASE}'/g' $< > $@
 	if [ X$(MIC) != X1 ]; then \
 		if [ X$(PSM_USE_SYS_UUID) = X1 ]; then \
 			REQUIRES="Requires: $(shell echo $(SYS_UUID_RPM_NAME) | sed -e 's/-devel//')" ; \
@@ -228,13 +228,13 @@ $(RPM_NAME).spec: $(RPM_NAME).spec.in
 				-e '/@REQUIRES-DEVEL@/d' \
 				-e 's/@PSM_UUID@/USE_PSM_UUID=1/g' $@ ; \
 	fi
-rpm: distclean $(RPM_NAME).spec
+dist: distclean intel-mic-psm.spec
 	rm -rf $(RPM_BUILD_DIR)
-	mkdir -p ${RPM_NAME}-${VERSION_RELEASE}
+	mkdir -p intel-mic-psm-${VERSION_RELEASE}
 	for x in $$(/usr/bin/find . -name ".git" -prune -o \
 			-name "cscope*" -prune -o \
 			-name "*.spec.in" -prune -o \
-			-name "${RPM_NAME}-${VERSION_RELEASE}" -prune -o \
+			-name "intel-mic-psm-${VERSION_RELEASE}" -prune -o \
 			-name "*.orig" -prune -o \
 			-name "*~" -prune -o \
 			-name "#*" -prune -o \
@@ -243,71 +243,17 @@ rpm: distclean $(RPM_NAME).spec
 			-name ".gitignore" -prune -o \
 			-print); do \
 		dir=$$(dirname $$x); \
-		mkdir -p ${RPM_NAME}-${VERSION_RELEASE}/$$dir; \
-		[ ! -d $$x ] && cp $$x ${RPM_NAME}-${VERSION_RELEASE}/$$dir; \
+		mkdir -p intel-mic-psm-${VERSION_RELEASE}/$$dir; \
+		[ ! -d $$x ] && cp $$x intel-mic-psm-${VERSION_RELEASE}/$$dir; \
 	done ; \
 	if [ -d .git ] ; then git log -n1 --pretty=format:%H > \
-		${RPM_NAME}-${VERSION_RELEASE}/COMMIT ; fi
-	tar czvf ${RPM_NAME}-${VERSION_RELEASE}.tar.gz ${RPM_NAME}-${VERSION_RELEASE}
-	rm -rf ${RPM_NAME}-${VERSION_RELEASE}
-	mkdir -p $(RPM_BUILD_DIR)/{BUILD,BUILDROOT,RPMS,SPECS,SRPMS,SOURCES}
-	rpmbuild --define "_topdir $(RPM_BUILD_DIR)" \
-		$(if $(LOCAL_PREFIX),--define "install_prefix $(LOCAL_PREFIX)") \
-		-ta $(RPM_NAME)-$(VERSION_RELEASE).tar.gz
-	mkdir -p $(TARG_DIR)
-	find $(RPM_BUILD_DIR)/RPMS -name "*.rpm" -exec cp {} $(TARG_DIR) \;
-	find $(RPM_BUILD_DIR)/SRPMS -name "*.src.rpm" -exec cp {} $(TARG_DIR) \;
-	rm -rf $(RPM_BUILD_DIR) $(RPM_NAME)-$(VERSION_RELEASE).tar.gz $(RPM_NAME).spec
-infinipath-rpms:
-	$(MAKE) PSM_HAVE_SCIF=0 TARG_DIR=$(TARG_DIR) rpm
-mic-rpms:
-	$(MAKE) PSM_HAVE_SCIF=1 TARG_DIR=$(TARG_DIR) rpm
-miccard-rpms:
-	$(MAKE) PSM_HAVE_SCIF=1 TARG_DIR=$(TARG_DIR) CC=x86_64-k1om-linux-gcc \
-		LOCAL_PREFIX=/opt/intel/mic/psm rpm
-rpms: infinipath-rpms mic-rpms miccard-rpms
+		intel-mic-psm-${VERSION_RELEASE}/COMMIT ; fi
+	tar czvf intel-mic-psm-${VERSION_RELEASE}.tar.gz intel-mic-psm-${VERSION_RELEASE}
+	rm -rf intel-mic-psm-${VERSION_RELEASE}
 
-.PHONY: package tarballs hosttarballs mictarballs
-package: DESTDIR := $(TARG_DIR)/$(TARBALL_NAME)
-package: distclean install
-	@echo "Building $(TARBALL_NAME) tarball..."
-	@if [ $(TARBALL_NAME) = mic-psm-card ]; then \
-		cp -a $(top_srcdir)/mic/* $(TARG_DIR)/$(TARBALL_NAME) ; \
-	fi
-	@sed -e 's!%PREFIX%!$(INSTALL_PREFIX)!g' \
-		-e 's!%SBINPREFIX%!$(INSTALL_SBIN_TARG)!g' \
-		-e 's!%LIBPREFIX%!$(INSTALL_LIB_TARG)!g' \
-		-e 's!%IPATHMAJOR%!$(IPATH_LIB_MAJOR)!g' \
-		-e 's!%IPATHMINOR%!$(IPATH_LIB_MINOR)!g' \
-		-e 's!%PSMMAJOR%!$(MAJOR)!g' \
-		-e 's!%PSMMINOR%!$(MINOR)!g' \
-		-e 's%^/%%g' \
-		$(top_srcdir)/$(TARBALL_NAME).srclist.in > $(TARG_DIR)/$(TARBALL_NAME).srclist
-	@sed -e 's!%PREFIX%!$(INSTALL_PREFIX)!g' \
-		-e 's!%SBINPREFIX%!'$(INSTALL_SBIN_TARG)'!g' \
-		-e 's!%LIBPREFIX%!'$(INSTALL_LIB_TARG)'!g' \
-		-e 's!%IPATHMAJOR%!$(IPATH_LIB_MAJOR)!g' \
-		-e 's!%IPATHMINOR%!$(IPATH_LIB_MINOR)!g' \
-		-e 's!%PSMMAJOR%!$(MAJOR)!g' \
-		-e 's!%PSMMINOR%!$(MINOR)!g' \
-		-e 's%^/%%g' \
-		$(top_srcdir)/$(TARBALL_NAME)-devel.srclist.in > \
-			$(TARG_DIR)/$(TARBALL_NAME)-devel.srclist
-	@cd $(TARG_DIR)/$(TARBALL_NAME) && \
-		tar czf $(TARG_DIR)/$(RPM_NAME).tar.gz \
-			-T $(TARG_DIR)/$(TARBALL_NAME).srclist && \
-		tar czf $(TARG_DIR)/$(RPM_NAME)-devel.tar.gz \
-			-T $(TARG_DIR)/$(TARBALL_NAME)-devel.srclist
-	@rm -rf $(TARG_DIR)/$(TARBALL_NAME) $(TARG_DIR)/$(TARBALL_NAME).srclist \
-		$(TARG_DIR)/$(TARBALL_NAME)-devel.srclist
-infinipath-tarballs:
-	$(MAKE) PSM_HAVE_SCIF=0 TARG_DIR=$(TARG_DIR) package
-mic-tarballs:
-	$(MAKE) PSM_HAVE_SCIF=1 TARG_DIR=$(TARG_DIR) package
-miccard-tarballs:
-	$(MAKE) PSM_HAVE_SCIF=1 TARG_DIR=$(TARG_DIR) CC=x86_64-k1om-linux-gcc \
-		LOCAL_PREFIX=/opt/intel/mic/psm package
-tarballs: infinipath-tarballs mic-tarballs miccard-tarballs
+ofeddist:
+	USE_PSM_UUID=1 $(MAKE) dist
+
 
 # rebuild the cscope database, skipping sccs files, done once for
 # top level

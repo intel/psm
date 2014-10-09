@@ -47,7 +47,6 @@ endif
 
 ${TARGLIB}-objs := ipath_debug.o ipath_time.o ipath_proto.o \
 	ipath_utils.o ipath_service.o ipath_protomic.o \
-	ipath_mic_vectorcpy.o ipath_mic_vectorpio.o \
 	ipath_dwordcpy-$(arch).o ipath_i2cflash.o ipath_sysfs.o ipath_syslog.o \
 	ipath_write_pio-$(arch).o $(PLATFORM_OBJ)
 

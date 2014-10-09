@@ -204,7 +204,7 @@ void ipath_write_pio(volatile uint32_t *piob,
  * address order.  Avoids serializing and flush instructions
  * where possible.
  */
-static void ipath_write_pio_special_trigger(volatile uint32_t *piob,
+static inline void ipath_write_pio_special_trigger(volatile uint32_t *piob,
 	const struct ipath_pio_params *pioparm, void *hdr, void *bdata,
 	unsigned offset)
 {

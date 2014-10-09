@@ -132,7 +132,7 @@ void
 psmi_mq_mtucpy(void *vdest, const void *vsrc, uint32_t nchars)
 {
 #ifdef __MIC__
-    ipath_mic_vectorcpy(vdest, vsrc, nchars);
+    memcpy(vdest, vsrc, nchars);
 #else
     unsigned char *dest = (unsigned char *)vdest;
     const unsigned char *src  = (const unsigned char *)vsrc;
