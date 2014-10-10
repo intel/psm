@@ -50,8 +50,6 @@ TARG_DIR ?= $(top_srcdir)
 TMI_DIR := $(top_srcdir)/contrib/$(TMI_NAME)
 
 TMI_NAME := tmi-2009-11-20
-RPM_NAME := $(if $(PSM_HAVE_SCIF:0=),$(if $(MIC:0=),intel-mic-psm-card,intel-mic-psm),infinipath-psm)
-TARBALL_NAME := $(if $(PSM_HAVE_SCIF:0=),$(if $(MIC:0=),mic-psm-card,mic-psm),ipath-psm)
 TARGLIB := libpsm_infinipath
 
 SUBDIRS:= ptl_self ptl_ips ptl_am libuuid ipath
@@ -209,8 +207,8 @@ tmiclean:
 	$(MAKE) -C contrib/$(TMI_NAME) verbs=PSM clean
 
 
-.PHONY: intel-mic-psm.spec 
-intel-mic-psm.spec: intel-mic-psm.spec.in
+.PHONY: infinipath-psm.spec 
+infinipath-psm.spec: infinipath-psm.spec.in
 	sed -e 's/@VERSION@/'${VERSION}'/g' -e 's/@RELEASE@/'${RELEASE}'/g' $< > $@
 	if [ X$(MIC) != X1 ]; then \
 		if [ X$(PSM_USE_SYS_UUID) = X1 ]; then \
@@ -228,13 +226,13 @@ intel-mic-psm.spec: intel-mic-psm.spec.in
 				-e '/@REQUIRES-DEVEL@/d' \
 				-e 's/@PSM_UUID@/USE_PSM_UUID=1/g' $@ ; \
 	fi
-dist: distclean intel-mic-psm.spec
+dist: distclean infinipath-psm.spec
 	rm -rf $(RPM_BUILD_DIR)
-	mkdir -p intel-mic-psm-${VERSION_RELEASE}
+	mkdir -p infinipath-psm-${VERSION_RELEASE}
 	for x in $$(/usr/bin/find . -name ".git" -prune -o \
 			-name "cscope*" -prune -o \
 			-name "*.spec.in" -prune -o \
-			-name "intel-mic-psm-${VERSION_RELEASE}" -prune -o \
+			-name "infinipath-psm-${VERSION_RELEASE}" -prune -o \
 			-name "*.orig" -prune -o \
 			-name "*~" -prune -o \
 			-name "#*" -prune -o \
@@ -243,13 +241,13 @@ dist: distclean intel-mic-psm.spec
 			-name ".gitignore" -prune -o \
 			-print); do \
 		dir=$$(dirname $$x); \
-		mkdir -p intel-mic-psm-${VERSION_RELEASE}/$$dir; \
-		[ ! -d $$x ] && cp $$x intel-mic-psm-${VERSION_RELEASE}/$$dir; \
+		mkdir -p infinipath-psm-${VERSION_RELEASE}/$$dir; \
+		[ ! -d $$x ] && cp $$x infinipath-psm-${VERSION_RELEASE}/$$dir; \
 	done ; \
 	if [ -d .git ] ; then git log -n1 --pretty=format:%H > \
-		intel-mic-psm-${VERSION_RELEASE}/COMMIT ; fi
-	tar czvf intel-mic-psm-${VERSION_RELEASE}.tar.gz intel-mic-psm-${VERSION_RELEASE}
-	rm -rf intel-mic-psm-${VERSION_RELEASE}
+		infinipath-psm-${VERSION_RELEASE}/COMMIT ; fi
+	tar czvf infinipath-psm-${VERSION_RELEASE}.tar.gz infinipath-psm-${VERSION_RELEASE}
+	rm -rf infinipath-psm-${VERSION_RELEASE}
 
 ofeddist:
 	USE_PSM_UUID=1 $(MAKE) dist
