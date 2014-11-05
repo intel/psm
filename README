@@ -1,5 +1,5 @@
 
-  Copyright (c) 2013 Intel Corporation.  All rights reserved.
+  Copyright (c) 2013-2014, Intel Corporation.  All rights reserved.
   Copyright (c) 2006-2011. QLogic Corporation. All rights reserved.
   Copyright (c) 2003-2006, PathScale, Inc. All rights reserved.
  
@@ -42,24 +42,16 @@ features with this release.
 Building PSM
 ------------
 Build requires that GNU GCC compiler is installed on the machine doing the
-build, if compiling code to mic card, the cross compiler x86_64-k1om-linux-gcc
-must also installed. If compiling mic version or mic card version, scif must
-installed on the system. Root privileges are required to install the runtime
-libraries and development header files into standard system location.
+build.  If compiling code for MIC, SCIF must be present.  Root privileges 
+are required to install the runtime libraries and development header files 
+into the standard system location.
 
-There are two mechanisms for building PSM:
-  1. Use provided Makefiles to build and install
-  2. Generate a tarball that can be used to build source and binary RPMs
-
-The instructions below use $PRODUCT and $RELEASE to refer to the product
-and release identifiers of the infinipath-psm RPM.
-
-Building from Makefiles
+Building from Makefile
 -----------------------
 1. Untar the tarball:
-	$ tar zxvf intel-psm-$PRODUCT-$RELEASE.tar.gz
+	$ tar zxvf infinipath-psm-$PRODUCT-$RELEASE.tar.gz
 2. Change directory into the untarred location:
-	$ cd intel-psm-$PRODUCT-$RELEASE
+	$ cd infinipath-psm-$PRODUCT-$RELEASE
 3. Run make on the command line. This will build the libraries. By default,
    the Makefile will auto-detect whether libuuid and the uuid.h header file
    are installed. If so, it will use the system's libuuid. Otherwise, PSM
@@ -70,9 +62,9 @@ Building from Makefiles
    build the SCIF enabled variant by default.  Auto-detection of SCIF can be
    disabled by passing the PSM_HAVE_SCIF variable.
 
-   To compile the SCIF-enabled version, set the PSM_HAVE_SCIF variable:
+   To specify the SCIF-enabled version, set the PSM_HAVE_SCIF variable:
         $ make PSM_HAVE_SCIF=1
-   To compile the non-SCIF version, even if SCIF is present, clear the variable:
+   To specify the non-SCIF version, even if SCIF is present, clear the variable:
         $ make PSM_HAVE_SCIF=0
 
    To force compiling with the included libuuid, use the USE_PSM_UUID variable:
@@ -95,43 +87,6 @@ install all files (libraries and headers) into "/tmp/psm-install/usr/...",
 libraries in "/tmp/psm-install/libraries" and the headers in
 "/tmp/psm-install/usr/include", and "make LIBDIR=/tmp/libs install" will
 install the libraries in "/tmp/libs" and the headers in "/usr/include".
-
-Generating PSM source and binary RPMs
---------------------------------------
-This is a two step process: Generate a PSM distribution tarball which can then
-be used to generate source and binary RPMs using the rpmbuild command with the
--ta option.
-1. Untar the tarball:
-	$ tar zxvf intel-psm-$PRODUCT-$RELEASE.tar.gz
-2. Change directory into the untarred location:
-	$ cd intel-psm-$PRODUCT-$RELEASE
-3. Generate distribution tarball
-   	$ make dist
-   To force compiling with the included libuuid, use the USE_PSM_UUID variable:
-        $ make dist USE_PSM_UUID=1
-   Note: It is recommended if you are planning on doing cross distribution
-builds to use the included libuuid i.e. If you are generating the distribution
-tarball on a RHEL machine but may use rpmbuild on a SuSE SLES machine. This
-minimized any cross distribution dependencies for the package.
-4. Generate source and binary packages.  
-   To generate a non-SCIF RPM:
-   	$ rpmbuild -ta intel-psm-$PRODUCT-$RELEASE.tar.gz
-   This produces the infinipath-psm-$PRODUCT-$RELEASE set of RPMs.
-   To generate a SCIF-enabled RPM:
-   	$ rpmbuild -ta intel-psm-$PRODUCT-$RELEASE.tar.gz -D 'PSM_HAVE_SCIF 1'
-   This produces the intel-psm-$PRODUCT-$RELEASE set of RPMs.
-
-   Please refere to the man page of rpmbuild for other options in generating
-RPMs. The generated RPMs are relocatable so one can provide the prefix option
-to retarget the installation location.
-
-Please note, in any case, you can build debugging version of the code by
-adding PSM_DEBUG=1 on make command line.
-
-If you run into any issues during build please post any questions with as much 
-information as possible to the psm-devel mailing list. Please include the 
-distribution you are building on, the compiler type and version as well as any 
-relevant error messages.
 
 MPI Libraries supported
 -----------------------
