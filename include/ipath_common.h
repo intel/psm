@@ -673,6 +673,12 @@ struct ipath_flash {
 /* K_PktFlags bits */
 #define INFINIPATH_KPF_INTR 0x1
 #define INFINIPATH_KPF_HDRSUPP 0x2
+#define INFINIPATH_KPF_INTR_HDRSUPP_MASK 0x3
+#define INFINIPATH_KPF_COMMIDX_MASK 0xF
+#define INFINIPATH_KPF_COMMIDX_SHIFT 2
+#define INFINIPATH_KPF_RESERVED_BITS(pkt_flags)            \
+  ((__le16_to_cpu(pkt_flags) << IPS_EPSTATE_COMMIDX_SHIFT) \
+  & INFINIPATH_KPF_COMMIDX_MASK)                           \
 
 #define INFINIPATH_MAX_SUBCONTEXT	4
 

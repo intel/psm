@@ -367,7 +367,8 @@ do_pkt_cksum(struct ips_recvhdrq_event *rcv_ev)
     uint32_t hd, tl;
     
     epstaddr =
-      ips_epstate_lookup(rcv_ev->recvq->epstate, rcv_ev->p_hdr->commidx);
+      ips_epstate_lookup(rcv_ev->recvq->epstate, rcv_ev->p_hdr->commidx +
+          INFINIPATH_KPF_RESERVED_BITS(rcv_ev->p_hdr->iph.pkt_flags));
     epstaddr = (epstaddr && epstaddr->ipsaddr) ? epstaddr : NULL;
     
     lcontext = 
@@ -580,7 +581,9 @@ ips_recvhdrq_progress(struct ips_recvhdrq *recvq)
 	    /* Classify packet from a known or unknown endpoint */
 	    struct ips_epstate_entry *epstaddr;
 
-	    epstaddr = ips_epstate_lookup(recvq->epstate, rcv_ev.p_hdr->commidx);	    
+      epstaddr =
+        ips_epstate_lookup(recvq->epstate, rcv_ev.p_hdr->commidx +
+            INFINIPATH_KPF_RESERVED_BITS(rcv_ev.p_hdr->iph.pkt_flags));
 	    if_pf (epstaddr == NULL || epstaddr->epid != rcv_ev.epid) {
 	        rcv_ev.ipsaddr = NULL;
 		recvq->recvq_callbacks.callback_packet_unknown(&rcv_ev);

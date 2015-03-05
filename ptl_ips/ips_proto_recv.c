@@ -1263,7 +1263,8 @@ ips_proto_process_packet_error(struct ips_recvhdrq_event *rcv_ev)
 	    
 	    /* Obtain ipsaddr for packet */
 	    epstaddr = ips_epstate_lookup(rcv_ev->recvq->epstate, 
-					  rcv_ev->p_hdr->commidx);	    
+        rcv_ev->p_hdr->commidx +
+        INFINIPATH_KPF_RESERVED_BITS(p_hdr->iph.pkt_flags));
 	    if_pf (epstaddr == NULL || epstaddr->epid != rcv_ev->epid)
 	      return 0; /* Unknown packet - drop */
 	    

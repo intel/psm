@@ -40,6 +40,7 @@
 #include "ipserror.h"
 #include "psm_mq_internal.h" // psmi_mq_handle_tiny_envelope
 #include "ptl_ips.h"
+#include "ips_epstate.h"
 
 /* Some tunable compile-time options */
 #define IPS_TINY_PROCESS_MQTINY 1   /* whether mq processing of tiny pkts is
@@ -315,7 +316,8 @@ void ips_proto_hdr(ips_scb_t *scb,
 		(scb->offset >> 2)); // convert from byte to word offset
 
 	p_hdr->lrh[2] = __cpu_to_be16(paywords + SIZE_OF_CRC);
-	p_hdr->iph.pkt_flags = __cpu_to_le16(kpf_flags);
+	p_hdr->iph.pkt_flags |= __cpu_to_le16(
+    (kpf_flags & INFINIPATH_KPF_INTR_HDRSUPP_MASK));
 
 	ips_kdeth_cksum(p_hdr); // Generate KDETH checksum
 
@@ -348,7 +350,9 @@ void ips_proto_hdr(ips_scb_t *scb,
         (epr->epr_pkt_context << INFINIPATH_I_CONTEXT_SHIFT) +
         (scb->tid << INFINIPATH_I_TID_SHIFT) +
         (scb->offset >> 2)); // convert from byte to word offset
-    p_hdr->iph.pkt_flags = __cpu_to_le16(kpf_flags);
+    p_hdr->iph.pkt_flags = __cpu_to_le16(
+      kpf_flags | ((epr->epr_commidx_to >> IPS_EPSTATE_COMMIDX_SHIFT) &
+      IPS_EPSTATE_COMMIDX_MASK));
     
     ips_kdeth_cksum(p_hdr); // Generate KDETH checksum
 

@@ -36,6 +36,7 @@
 #include "ips_proto_internal.h"
 #include "ips_proto_header.h"
 #include "ips_proto_help.h"
+#include "ips_epstate.h"
 
 void ips_proto_dump_frame(void *frame, int lenght, char *message)
 {
@@ -99,7 +100,8 @@ void ips_proto_show_header(struct ips_message_header *p_hdr, char *msg)
     printf("BTH: R8-DestQP24 %x\n", __be32_to_cpu(p_hdr->bth[1]));
     printf("BTH: AR1-Res7-PSN24 %x\n", __be32_to_cpu(p_hdr->bth[2]));
     printf("IPH: chksum %x\n", __le16_to_cpu(p_hdr->iph.chksum));
-    printf("IPH: pkt_flags %x\n", __le16_to_cpu(p_hdr->iph.pkt_flags));
+    printf("IPH: pkt_flags %x\n", __le16_to_cpu(
+        p_hdr->iph.pkt_flags) & INFINIPATH_KPF_INTR_HDRSUPP_MASK);
     printf("IPH: ver %i\n",
         (__le32_to_cpu(p_hdr->iph.ver_context_tid_offset)
         >> INFINIPATH_I_VERS_SHIFT) & INFINIPATH_I_VERS_MASK);
@@ -126,7 +128,8 @@ void ips_proto_show_header(struct ips_message_header *p_hdr, char *msg)
     printf("context %d (src_context %d src_context_ext %d) src_subcontext %d\n",
 	IPS_HEADER_SRCCONTEXT_GET(p_hdr), p_hdr->src_context, p_hdr->src_context_ext,
 	p_hdr->src_subcontext);
-    printf("src_rank/commidx %i\n", p_hdr->commidx);
+    printf("src_rank/commidx %i\n", p_hdr->commidx |
+        INFINIPATH_KPF_RESERVED_BITS(p_hdr->iph.pkt_flags));
     if (tid != IPATH_EAGER_TID_ID)
 	printf("expected_tid_session_id %i\n", p_hdr->data[0].u32w0);
     printf("flags %x\n", p_hdr->flags);

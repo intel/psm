@@ -1020,7 +1020,10 @@ _build_ctrl_message(struct ips_proto *proto,
         (IPS_PROTO_VERSION << INFINIPATH_I_VERS_SHIFT) +
         (epr->epr_pkt_context << INFINIPATH_I_CONTEXT_SHIFT) +
         (IPATH_EAGER_TID_ID << INFINIPATH_I_TID_SHIFT));
-    p_hdr->iph.pkt_flags = __cpu_to_le16(pkt_flags);
+    p_hdr->iph.pkt_flags = __cpu_to_le16(
+        (pkt_flags & INFINIPATH_KPF_INTR_HDRSUPP_MASK) |
+        ((epr->epr_commidx_to >> IPS_EPSTATE_COMMIDX_SHIFT)
+        & IPS_EPSTATE_COMMIDX_MASK));
     
     ips_kdeth_cksum(p_hdr);  // Generate KDETH  checksum
     
