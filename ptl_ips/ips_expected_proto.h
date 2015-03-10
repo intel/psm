@@ -48,6 +48,7 @@ struct ips_protoexp {
     struct ips_tid	  tidc;
     struct ips_tfctrl      tfctrl;
 
+    uint32_t               tid_desc_send_free;
     unsigned int           tidflow_seed;
     ptl_epaddr_flow_t      tid_ep_flow;
     uint32_t		   tid_flags;

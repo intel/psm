@@ -183,6 +183,7 @@ struct psm_mq_req {
     psmi_egrid_t egrid;
     psm_epaddr_t epaddr;
     uint16_t msg_seqnum;	/* msg seq num for mctxt */
+    uint16_t tsess_count;   /* tid session count for this message */
     uint8_t tid_grant[128];	/* don't change the size unless... */
 
     uint32_t recv_msglen; /* Message length we are ready to receive */

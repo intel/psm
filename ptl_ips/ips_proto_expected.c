@@ -268,6 +268,8 @@ ips_protoexp_init(const psmi_context_t *context,
 			    "Couldn't allocate tid descriptor memory pool");
 	    goto fail;
 	}
+
+  protoexp->tid_desc_send_free = maxsz;
     }
 
     /* Receive descriptors.
@@ -1064,8 +1066,10 @@ ips_tid_send_tid_release_msg(struct ips_tid_send_desc *tidsendc)
 	      tidsendc->length, req->send_msgoff, req->send_msglen, req,
 	      req->send_msgoff == req->send_msglen ? " (complete)" : "");
   
-  if (req->send_msgoff == req->send_msglen) 
+  if (req->send_msgoff == req->send_msglen) { 
+    protoexp->tid_desc_send_free += req->tsess_count;
     psmi_mq_handle_rts_complete(req);
+  }
 }
 
 static
