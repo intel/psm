@@ -167,6 +167,8 @@ ips_mq_send_envelope(struct ips_proto *proto, psm_epaddr_t mepaddr,
     if (do_flush)
 	err = ips_recv_progress_if_busy(ipsaddr->ptl, err);
 
+    PSMI_BLOCKUNTIL(proto->ep,err, (scb->flags&IPS_SEND_FLAG_PENDING) == 0);
+
     /* As per the PSM error model (or lack thereof), PSM clients expect to see
      * only PSM_OK as a recoverable error */
     if (err == PSM_EP_NO_RESOURCES || err == PSM_OK_NO_PROGRESS)
