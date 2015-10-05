@@ -84,6 +84,7 @@ psmi_verno_isinteroperable(uint16_t verno)
     int iscompat = -1;
 
     switch (psmi_verno) {
+       case 0x0110:
        case 0x010f:
 	 /* Multi-rail is supported in this version, since the packet header
 	  * sequence number is shrunk from 24bits to 16bits, old version

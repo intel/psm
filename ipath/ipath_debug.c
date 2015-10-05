@@ -52,6 +52,7 @@ FILE *__ipath_dbgout;
 static void init_ipath_mylabel(void) __attribute__ ((constructor));
 static void init_ipath_backtrace(void) __attribute__ ((constructor));
 static void init_ipath_dbgfile(void) __attribute__ ((constructor));
+static void fini_ipath_backtrace(void) __attribute__ ((destructor));
 
 static void init_ipath_mylabel(void)
 {
@@ -140,6 +141,13 @@ ipath_sighdlr(int sig, siginfo_t *p1, void *ucv)
     exit(1); // not _exit(), want atexit handlers to get run
 }
 
+static struct sigaction sigsegv_act;
+static struct sigaction sigbus_act;
+static struct sigaction sigill_act;
+static struct sigaction sigabrt_act;
+static struct sigaction sigint_act;
+static struct sigaction sigterm_act;
+
 // we do this as a constructor so any user program that sets signal
 // handlers for these will override our settings, but we still
 // get backtraces if they don't
@@ -152,12 +160,24 @@ static void init_ipath_backtrace(void)
 
     if(!getenv("IPATH_NO_BACKTRACE"))  {// permanent, although probably
         // undocumented way to disable backtraces.
-        (void)sigaction(SIGSEGV, &act, NULL);
-        (void)sigaction(SIGBUS,  &act, NULL);
-        (void)sigaction(SIGILL,  &act, NULL);
-        (void)sigaction(SIGABRT, &act, NULL);
-	(void)sigaction(SIGINT,  &act, NULL);
-	(void)sigaction(SIGTERM, &act, NULL);
+        (void)sigaction(SIGSEGV, &act, &sigsegv_act);
+        (void)sigaction(SIGBUS,  &act, &sigbus_act);
+        (void)sigaction(SIGILL,  &act, &sigill_act);
+        (void)sigaction(SIGABRT, &act, &sigabrt_act);
+        (void)sigaction(SIGINT,  &act, &sigint_act);
+        (void)sigaction(SIGTERM, &act, &sigterm_act);
+    }
+}
+
+static void fini_ipath_backtrace(void)
+{
+    if(!getenv("IPATH_NO_BACKTRACE"))  {
+        (void)sigaction(SIGSEGV, &sigsegv_act, NULL);
+        (void)sigaction(SIGBUS,  &sigbus_act, NULL);
+        (void)sigaction(SIGILL,  &sigill_act, NULL);
+        (void)sigaction(SIGABRT, &sigabrt_act, NULL);
+        (void)sigaction(SIGINT,  &sigint_act, NULL);
+        (void)sigaction(SIGTERM, &sigterm_act, NULL);
     }
 }
 

@@ -67,9 +67,9 @@ typedef struct psm_ep *psm_ep_t;
  * psm_mq_init).  */
 typedef struct psm_mq *psm_mq_t;
 
-#define PSM_VERNO       0x010f 
-#define PSM_VERNO_MAJOR 0x01   
-#define PSM_VERNO_MINOR 0x0f   
+#define PSM_VERNO       0x0110
+#define PSM_VERNO_MAJOR 0x01
+#define PSM_VERNO_MINOR 0x10
 
 enum psm_error {
     
