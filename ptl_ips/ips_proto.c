@@ -762,7 +762,7 @@ _build_ctrl_message(struct ips_proto *proto,
     uint32_t tot_paywords = sizeof(struct ips_message_header) >> 2;
     struct ips_epinfo *epinfo = &proto->epinfo;
     struct ips_epinfo_remote *epr = &ipsaddr->epr;
-    uint16_t pkt_flags = 0;
+    uint16_t pkt_flags = IPS_EPSTATE_COMMIDX_PACK(epr->epr_commidx_to);
     struct ips_message_header *p_hdr = &msg->pbc_hdr.hdr;
     ips_path_rec_t *ctrl_path = ipsaddr->epr.epr_path[IPS_PATH_HIGH_PRIORITY][ipsaddr->epr.epr_hpp_index];
     int paylen = 0;
@@ -1021,10 +1021,7 @@ _build_ctrl_message(struct ips_proto *proto,
         (IPS_PROTO_VERSION << INFINIPATH_I_VERS_SHIFT) +
         (epr->epr_pkt_context << INFINIPATH_I_CONTEXT_SHIFT) +
         (IPATH_EAGER_TID_ID << INFINIPATH_I_TID_SHIFT));
-    p_hdr->iph.pkt_flags = __cpu_to_le16(
-        (pkt_flags & INFINIPATH_KPF_INTR_HDRSUPP_MASK) |
-        ((epr->epr_commidx_to >> IPS_EPSTATE_COMMIDX_SHIFT)
-        & IPS_EPSTATE_COMMIDX_MASK));
+    p_hdr->iph.pkt_flags = __cpu_to_le16(pkt_flags);
     
     ips_kdeth_cksum(p_hdr);  // Generate KDETH  checksum
     

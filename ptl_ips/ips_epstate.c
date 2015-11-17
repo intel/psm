@@ -49,7 +49,8 @@ ips_epstate_init(struct ips_epstate *eps, const psmi_context_t *context)
 {
     memset(eps, 0, sizeof(*eps));
     eps->context = context;
-    eps->eps_base_idx = 0;
+    eps->eps_base_idx = ((ips_epstate_idx)get_cycles()) &
+      (IPS_EPSTATE_COMMIDX_MAX-1);
     return PSM_OK;
 }
 
@@ -102,7 +103,7 @@ ips_epstate_add(struct ips_epstate *eps, struct ptl_epaddr *ipsaddr,
 	}
     }
     psmi_assert_always(i != eps->eps_tabsize);
-    commidx = j & (IPS_EPSTATE_COMMIDX_MAX - 1);
+    commidx = (j - eps->eps_base_idx) & (IPS_EPSTATE_COMMIDX_MAX-1);
     _IPATH_VDBG("node %s gets commidx=%d (table idx %d)\n", 
 	    psmi_epaddr_get_name(ipsaddr->epaddr->epid), commidx, j);
     eps->eps_tab[j].epid = 
@@ -124,7 +125,7 @@ ips_epstate_del(struct ips_epstate *eps, ips_epstate_idx commidx)
 {
     ips_epstate_idx idx;
     /* actual table index */
-    idx = commidx & (IPS_EPSTATE_COMMIDX_MAX - 1);
+    idx = (commidx + eps->eps_base_idx) & (IPS_EPSTATE_COMMIDX_MAX-1);
     psmi_assert_always(idx < eps->eps_tabsize);
     _IPATH_VDBG("commidx=%d, table_idx=%d\n", commidx, idx);
     eps->eps_tab[idx].epid = 0;
