@@ -381,7 +381,7 @@ psmi_context_check_status(const psmi_context_t *contexti)
 		else
 		    errmsg = "Hardware not found";
 
-		psmi_handle_error(context->ep, err, errmsg);
+		psmi_handle_error(context->ep, err, errmsg, "%s");
 	    }
 	}
     }
