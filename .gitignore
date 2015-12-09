@@ -1,4 +1,6 @@
 infinipath-psm.spec
 infinipath-psm-*.tar.gz
-*~
-#*
+*.o
+*.d
+*.so*
+_revision.c
