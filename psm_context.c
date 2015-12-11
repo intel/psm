@@ -43,7 +43,6 @@
 #endif
 
 #define PSMI_SHARED_CONTEXTS_ENABLED_BY_DEFAULT   1
-static int	psmi_sharedcontext_params(int *nranks, int *rankid);
 static int      psmi_get_hca_selection_algorithm(void);
 static psm_error_t psmi_init_userinfo_params(psm_ep_t ep, 
 		int unit_id, int port,
@@ -593,7 +592,6 @@ fail:
     return err;
 }
 
-static
 int
 psmi_sharedcontext_params(int *nranks, int *rankid)
 {

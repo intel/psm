@@ -389,8 +389,20 @@ psmi_shm_attach(psm_ep_t ep, int *shmidx_o)
        amsh_init_segment(), and physical memory is only allocated by the OS
        accordingly.  So, it looks like this is consumes a lot of memory,
        but really it consumes as much as necessary for each active process. */
+#ifdef PSM_HAVE_SCIF
     segsz = psmi_amsh_segsize(PTL_AMSH_MAX_LOCAL_PROCS,
                               PTL_AMSH_MAX_LOCAL_NODES);
+#else
+    /* In the non-SCIF case we should be able to get away with just allocating
+     * enough shm for the number of mpi ranks, if the number of ranks is
+     * unavailable, then we will fallback to the number of online cpu cores.
+     * This will help cut back on virtual memory usage.
+     */
+    int nranks, rankid, nprocs;
+    psmi_sharedcontext_params(&nranks, &rankid);
+    nprocs = (nranks <= 0) ? sysconf(_SC_NPROCESSORS_ONLN) : nranks;
+    segsz = psmi_amsh_segsize(nprocs, PTL_AMSH_MAX_LOCAL_NODES);
+#endif
 
     ep->amsh_shmfd = shm_open(ep->amsh_keyname, 
                           O_RDWR | O_CREAT | O_EXCL | O_TRUNC, S_IRWXU);
@@ -820,14 +832,23 @@ psmi_shm_detach(psm_ep_t ep)
 	pthread_mutex_unlock((pthread_mutex_t *) &(ep->amsh_dirpage->lock));
 
         /* Instead of dynamically shrinking the shared memory region, we always
-           leave it allocated for up to PTL_AMSH_MAX_LOCAL_PROCS processes.
+           leave it allocated for up to PTL_AMSH_MAX_LOCAL_PROCS or number
+           of processors online.
            Thus mremap() is never necessary, nor is ftruncate() here.
            However when the attached process count does go to 0, we should
            fully munmap() the entire region.
          */
+#ifdef PSM_HAVE_SCIF
         if (munmap((void *) ep->amsh_shmbase,
                     psmi_amsh_segsize(PTL_AMSH_MAX_LOCAL_PROCS,
                                       PTL_AMSH_MAX_LOCAL_NODES))) {
+#else
+        int nranks, rankid, nprocs;
+        psmi_sharedcontext_params(&nranks, &rankid);
+        nprocs = (nranks <= 0) ? sysconf(_SC_NPROCESSORS_ONLN) : nranks;
+        if (munmap((void *) ep->amsh_shmbase,
+                    psmi_amsh_segsize(nprocs, PTL_AMSH_MAX_LOCAL_NODES))) {
+#endif
             err = psmi_handle_error(NULL, PSM_SHMEM_SEGMENT_ERR,
                     "Error with munamp of shared segment: %s", strerror(errno));
             goto fail;

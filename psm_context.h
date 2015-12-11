@@ -67,6 +67,7 @@ psm_error_t psmi_context_check_status(const psmi_context_t *context);
 psm_error_t psmi_context_interrupt_set(psmi_context_t *context, int enable);
 int	    psmi_context_interrupt_isenabled(psmi_context_t *context);
 
+int psmi_sharedcontext_params(int *nranks, int *rankid);
 /* Runtime flags describe what features are enabled in hw/sw and which
  * corresponding PSM features are being used.
  *
