@@ -633,7 +633,8 @@ proto_sdma_init(struct ips_proto *proto, const psmi_context_t *context)
 		(union psmi_envvar_val) defval,
 		&env_sdma);
 
-    proto->flags |= env_sdma.e_uint & IPS_PROTO_FLAGS_ALL_SDMA;
+    if(env_sdma.e_uint != 1)
+      proto->flags |= env_sdma.e_uint & IPS_PROTO_FLAGS_ALL_SDMA;
 
     /* If anything uses send dma, figure out our max packet threshold to call
      * send dma with */
