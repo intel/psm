@@ -789,7 +789,7 @@ _process_err_chk_gen(ips_epaddr_t *ipsaddr, struct ips_message_header *p_hdr)
   ptl_arg_t desc_id = p_hdr->data[0];
   ptl_arg_t send_desc_id = p_hdr->data[1];
   ptl_arg_t desc_tidrecvc;
-  ptl_arg_t args[3];
+  ptl_arg_t args[3] = {};
   int16_t seq_off;
   uint8_t ack_type;
   

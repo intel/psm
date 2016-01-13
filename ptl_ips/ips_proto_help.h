@@ -79,7 +79,7 @@ ips_flow_gen_ackflags(ips_scb_t *scb, struct ips_flow *flow))
 PSMI_ALWAYS_INLINE(
 ptl_epaddr_flow_t ips_proto_flowid(struct ips_message_header *p_hdr))
 {
-  ptl_epaddr_flow_t flowidx = IPS_FLOWID_GET_INDEX(p_hdr->flowid);
+  ptl_epaddr_flow_t flowidx = IPS_FLOWID2INDEX(p_hdr->flowid);
   psmi_assert(flowidx < EP_FLOW_LAST);
   return flowidx;
 }

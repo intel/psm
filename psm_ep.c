@@ -1394,7 +1394,7 @@ psmi_parse_devices(int devices[PTL_MAX_INIT], const char *devstring)
 	}
     }
     if (b_new != devstr)  /* we parsed something, remove trailing comma */
-	*(b_new - 1) = '\0';
+	b_new[strlen(b_new) - 1] = '\0';
 
     _IPATH_PRDBG("PSM Device allocation order: %s\n", devstr);
 fail:

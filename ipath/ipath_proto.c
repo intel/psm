@@ -460,7 +460,7 @@ struct _ipath_ctrl *ipath_userinit(int fd, struct ipath_user_info *u,
     _IPATH_DBG("chipstatus=0x%llx\n",
 	       (unsigned long long)*spctrl->__ipath_spi_status);
 
-    if(u->spu_subcontext_cnt) {
+    if(u->spu_subcontext_cnt > 0) {
 	unsigned num_subcontexts = u->spu_subcontext_cnt;
 	size_t size;
 	int i;

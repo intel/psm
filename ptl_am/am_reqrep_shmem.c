@@ -2679,7 +2679,7 @@ psm_error_t
 amsh_mq_rndv(ptl_t *ptl, psm_mq_t mq, psm_mq_req_t req,
              psm_epaddr_t epaddr, uint64_t tag, const void *buf, uint32_t len)
 {
-    psm_amarg_t args[5];
+    psm_amarg_t args[5] = {};
     psm_error_t err = PSM_OK;
 
     args[0].u32w0 = MQ_MSG_RTS;
@@ -2744,7 +2744,7 @@ psm_error_t
 amsh_mq_send_inner(psm_mq_t mq, psm_mq_req_t req, psm_epaddr_t epaddr, 
                    uint32_t flags, uint64_t tag, const void *ubuf, uint32_t len))
 {
-    psm_amarg_t args[3];
+    psm_amarg_t args[3] = {};
     psm_error_t err = PSM_OK;
     int is_blocking = (req == NULL);
 

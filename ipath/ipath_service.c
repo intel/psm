@@ -718,7 +718,7 @@ ipath_get_port_gid(int unit, int port, uint64_t *hi, uint64_t *lo)
 		       unit, port, strerror(errno));
     }
     else {
-        int gid[8];
+        unsigned int gid[8];
         if (sscanf(gid_str, "%4x:%4x:%4x:%4x:%4x:%4x:%4x:%4x", 
 		   &gid[0], &gid[1], &gid[2], &gid[3],
 		   &gid[4], &gid[5], &gid[6], &gid[7]) != 8) {

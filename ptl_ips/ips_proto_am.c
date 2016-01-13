@@ -298,7 +298,7 @@ ips_am_run_handler(struct ips_am_token *tok,
     else {
 	/* Arguments and payload may split across header/eager_payload
 	 * boundaries. */
-	psm_amarg_t args[8];
+	psm_amarg_t args[8] = {};
 	int i;
 	uint64_t *payload = (uint64_t *) ips_recvhdrq_event_payload(rcv_ev);
 	uint32_t paylen = ips_recvhdrq_event_paylen(rcv_ev);

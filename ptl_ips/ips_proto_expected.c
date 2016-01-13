@@ -1037,7 +1037,7 @@ ips_tid_send_tid_release_msg(struct ips_tid_send_desc *tidsendc)
   psm_error_t err;
   struct ips_protoexp *protoexp = tidsendc->protoexp;
   psm_mq_req_t req = tidsendc->mqreq;
-  ptl_arg_t desc_id[3];
+  ptl_arg_t desc_id[3] = {};
   uint64_t t_cyc;
   
   desc_id[0] = tidsendc->tid_list.tsess_descid;
@@ -1121,7 +1121,7 @@ ips_tid_release_timer_callback(struct psmi_timer *timer, uint64_t current)
     struct ips_protoexp *protoexp = tidsendc->protoexp;
     uint64_t t_cyc;
     psm_error_t err;
-    ptl_arg_t desc_id[3];
+    ptl_arg_t desc_id[3] = {};
 
     /* 0 contain's the receiver's desc_id, 1 contains the sender's desc_id */
     desc_id[0] = tidsendc->tid_list.tsess_descid;
@@ -2358,11 +2358,11 @@ ips_protoexp_handle_tf_seqerr(const struct ips_recvhdrq_event *rcv_ev)
   struct ips_protoexp *protoexp = rcv_ev->proto->protoexp;
   struct ips_message_header *p_hdr = rcv_ev->p_hdr;
   struct ips_tid_recv_desc *tidrecvc;
-  ptl_arg_t desc_id = rcv_ev->p_hdr->data[0];
-  ptl_arg_t send_descid = rcv_ev->p_hdr->data[1];
+  ptl_arg_t desc_id = rcv_ev->p_hdr->hdr_data[0];
+  ptl_arg_t send_descid = rcv_ev->p_hdr->hdr_data[1];
   ptl_arg_t desc_tidrecvc;
   psmi_seqnum_t sequence_num;
-  ptl_arg_t args[3];
+  ptl_arg_t args[3] = {};
   psm_error_t err;
 
   psmi_assert_always(protoexp != NULL);
@@ -2457,6 +2457,7 @@ ips_protoexp_handle_tf_generr(const struct ips_recvhdrq_event *rcv_ev)
   struct ips_message_header *p_hdr = rcv_ev->p_hdr;
   int tid = IPS_HDR_TID(p_hdr);
   struct ips_tid_recv_desc *tidrecvc;
+  psmi_assert(rcv_ev->p_hdr->data != NULL);
   ptl_arg_t desc_id = rcv_ev->p_hdr->data[0];
   ptl_arg_t desc_tidrecvc;
 

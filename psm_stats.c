@@ -566,15 +566,15 @@ stats_register_ipath_counters(psm_ep_t ep)
 			     entries,
 			     nc+npc,
 			     ep);
-    return;
 
 bail:
     if (cnames != NULL)
-	    infinipath_release_names(cnames);
+	    psmi_free(cnames);
     if (pcnames != NULL)
-	    infinipath_release_names(pcnames);
+	    psmi_free(pcnames);
     if (entries != NULL)
 	    psmi_free(entries);
+    return;
 }
 
 static 
@@ -604,13 +604,13 @@ stats_register_ipath_stats(psm_ep_t ep)
 			     entries,
 			     ns,
 			     ep);
-    return;
 
 bail:
     if (snames != NULL)
-	    infinipath_release_names(snames);
+	    psmi_free(snames);
     if (entries != NULL)
 	    psmi_free(entries);
+    return;
 }
 
 #undef _SDECL

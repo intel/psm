@@ -44,7 +44,7 @@ psmi_amsh_am_short_request(psm_epaddr_t epaddr,
 			   psm_am_completion_fn_t completion_fn,
 			   void *completion_ctxt)
 {
-  psm_amarg_t req_args[NSHORT_ARGS];
+  psm_amarg_t req_args[NSHORT_ARGS] = {};
 
   /* All sends are synchronous. Ignore PSM_AM_FLAG_ASYNC. 
    * TODO: Treat PSM_AM_FLAG_NOREPLY as "advisory". This was mainly
@@ -76,7 +76,7 @@ psmi_amsh_am_short_reply(psm_am_token_t tok,
 			 psm_am_completion_fn_t completion_fn,
 			 void *completion_ctxt)
 {
-  psm_amarg_t rep_args[NSHORT_ARGS];
+  psm_amarg_t rep_args[NSHORT_ARGS] = {};
 
   /* For now less than NSHORT_ARGS-1. We use the first arg to carry the handler
    * index.

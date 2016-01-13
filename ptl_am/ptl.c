@@ -43,7 +43,7 @@ static
 psm_error_t
 ptl_handle_rtsmatch_request(psm_mq_req_t req, int was_posted, amsh_am_token_t *tok)
 {
-    psm_amarg_t	args[5];
+    psm_amarg_t	args[5] = {};
     psm_epaddr_t epaddr = req->rts_peer;
     ptl_t *ptl = epaddr->ptl;
     int pid = 0;
@@ -232,7 +232,7 @@ psmi_am_mq_handler_rtsmatch(void *toki, psm_amarg_t *args, int narg, void *buf, 
     void *dest = (void *)(uintptr_t) args[2].u64w0;
     uint32_t msglen = args[3].u32w0;
     int pid = 0;
-    psm_amarg_t rarg[1];
+    psm_amarg_t rarg[1] = {};
 
     _IPATH_VDBG("[rndv][send] req=%p dest_req=%p src=%p dest=%p len=%d\n",
 		    sreq, (void*)(uintptr_t)args[1].u64w0, sreq->buf, dest, msglen);

@@ -289,8 +289,11 @@ memcpy_check_size (memcpy_fn_t fn, int *p, int *f, size_t n)
   else {
     void *src_p, *dst_p;
     if (posix_memalign(&src_p, 64, size) != 0 ||
-        posix_memalign(&dst_p, 64, size) != 0) 
+        posix_memalign(&dst_p, 64, size) != 0) {
+      if (src_p) psmi_free(src_p);
+      if (dst_p) psmi_free(dst_p);
       return -1;
+    }
     else {
 	src = (uint8_t *) src_p;
 	dst = (uint8_t *) dst_p;

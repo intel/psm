@@ -423,7 +423,7 @@ struct ptl_epaddr_stats {
     (((uint16_t)flowindex)&0x7) )
 
 #define IPS_FLOWID_GET_PROTO(flow)    (((flow)>>3)&0x7)
-#define IPS_FLOWID_GET_INDEX(flow)    ((flow)&0x7)
+#define IPS_FLOWID_GET_INDEX(flow)    ((flow) % 4)
 
 #define IPS_FLOWID2INDEX(flow)	\
    ((flow)&0x7)
