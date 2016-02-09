@@ -364,16 +364,6 @@ ips_ptl_mq_rndv(psm_mq_req_t req, psm_epaddr_t mepaddr, ips_epaddr_t *ipsaddr,
     req->recv_msgoff = 0;
     req->rts_peer = ipsaddr->epaddr;
         
-    /* expected tid protocol will be used for this message */
-    if(len > proto->mq->ipath_thresh_rv && proto->protoexp) {
-      req->tsess_count = (len + proto->mq->ipath_window_rv - 1)
-                      / proto->mq->ipath_window_rv;
-      while (req->tsess_count > proto->protoexp->tid_desc_send_free)
-        psmi_poll_internal(proto->mq->ep, 1);
-      
-      proto->protoexp->tid_desc_send_free -= req->tsess_count;
-    }
-
     scb = mq_alloc_tiny(proto);
 
     /* If the expected tid protocol is active, use it or else resort to
