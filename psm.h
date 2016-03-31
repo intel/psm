@@ -275,7 +275,7 @@ typedef struct psm_error_token	*psm_error_token_t;
  * individually set for each opened endpoint.  By default, endpoints will
  * inherit the global handler registered at the time of open. 
  *
- * [in] ep Handle associated to the endpoint over which the error occured
+ * [in] ep Handle associated to the endpoint over which the error occurred
  *               or NULL if the error is being handled by the global error
  *               handler.
  * [in] error PSM error identifier

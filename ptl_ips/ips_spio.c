@@ -324,7 +324,7 @@ spio_update_shadow(struct ips_spio *ctrl, int index)
       }
       
       if (event_mask & IPATH_EVENT_LID_CHANGE) {
-	/* Display a warning that LID change has occured during the run. This
+	/* Display a warning that LID change has occurred during the run. This
 	 * is not supported in the current implementation and in general is
 	 * bad for the SM to re-assign LIDs during a run.
 	 */
