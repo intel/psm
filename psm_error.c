@@ -251,7 +251,7 @@ psmi_error_items[] = {
     { PSMI_NOLOG, "unknown 37" },
     { PSMI_NOLOG, "unknown 38" },
     { PSMI_NOLOG, "unknown 39" },
-    { PSMI_NOLOG, "Unknown/unresolved connection status (other errors occured)" }, /* PSM_EPID_UNKNOWN = 40 */
+    { PSMI_NOLOG, "Unknown/unresolved connection status (other errors occurred)" }, /* PSM_EPID_UNKNOWN = 40 */
     { PSMI_NOLOG, "Endpoint could not be reached" }, /* PSM_EPID_UNREACHABLE = 41 */
     { PSMI_NOLOG, "unknown 42" },
     { LOG_CRIT  , "Invalid node (mismatch in bit width 32/64 or byte order)" }, /* PSM_EPID_INVALID_NODE = 43 */
