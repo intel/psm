@@ -542,7 +542,7 @@ psmi_shm_attach(psm_ep_t ep, int *shmidx_o)
 
 	ep->amsh_dirpage->is_init = 1;
 	_IPATH_PRDBG("Mapped and initialized shm object control page at %p,"
-                    "size=%ld, kcopy minor is %d (mode=%s)\n", mapptr,
+                    "size=%zu, kcopy minor is %d (mode=%s)\n", mapptr,
 		    segsz, kcopy_minor,
 		    psmi_kassist_getmode(ep->psmi_kassist_mode));
     }
