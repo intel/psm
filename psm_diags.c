@@ -281,10 +281,11 @@ memcpy_check_size (memcpy_fn_t fn, int *p, int *f, size_t n)
   if (USE_MALLOC) {
     src = psmi_malloc(PSMI_EP_NONE, UNDEFINED, size);
     dst = psmi_malloc(PSMI_EP_NONE, UNDEFINED, size);
-    if (src == NULL || dst == NULL) 
+    if (src == NULL || dst == NULL) {
       if (src) psmi_free(src);
       if (dst) psmi_free(dst);
       return -1;
+	}
   }
   else {
     void *src_p = NULL, *dst_p = NULL;
