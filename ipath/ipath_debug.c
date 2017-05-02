@@ -52,6 +52,7 @@ FILE *__ipath_dbgout;
 static void init_ipath_mylabel(void) __attribute__ ((constructor));
 static void init_ipath_backtrace(void) __attribute__ ((constructor));
 static void init_ipath_dbgfile(void) __attribute__ ((constructor));
+static void fini_ipath_mylabel(void) __attribute__ ((destructor));
 static void fini_ipath_backtrace(void) __attribute__ ((destructor));
 
 static void init_ipath_mylabel(void)
@@ -78,6 +79,12 @@ static void init_ipath_mylabel(void)
     if (lbl[0] == '\0')
 	snprintf(lbl, 1024, "%s.%u", hostname, getpid());
     __ipath_mylabel = strdup(lbl);
+}
+
+static void fini_ipath_mylabel(void) 
+{
+    if (NULL != __ipath_mylabel)
+        free(__ipath_mylabel);
 }
 
 static void
