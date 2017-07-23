@@ -70,7 +70,7 @@ ${TARGLIB}.so.${MAJOR}: ${TARGLIB}.so.${MAJOR}.${MINOR}
 # file around.  Generate it such that the ident command can find it
 # and strings -a | grep InfiniPath does a reasonable job as well.
 ${TARGLIB}.so.${MAJOR}.${MINOR}: ${${TARGLIB}-objs}
-	date +'static __attribute__ ((unused)) char __psc_infinipath_revision[] ="$$""Date: %F %R ${rpm_extra_description}InfiniPath $$";' > _revision.c
+	date -u -d@$${SOURCE_DATE_EPOCH:-$$(date +%s)} +'static __attribute__ ((unused)) char __psc_infinipath_revision[] ="$$""Date: %F %R ${rpm_extra_description}InfiniPath $$";' > _revision.c
 	$(CC) -c $(BASECFLAGS) $(INCLUDES) _revision.c -o _revision.o
 	$(CC) -o $@ -Wl,-soname=${TARGLIB}.so.${MAJOR} -shared \
 		-Wl,--unique='*fastpath*' \
