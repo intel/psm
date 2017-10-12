@@ -279,7 +279,7 @@ ipath_timebase_from_cpuinfo(uint32_t old_pico_per_cycle)
 #endif
 
     /* If there's no change (within a small range), just return the old one */
-    if (abs(new_pico_per_cycle - old_pico_per_cycle) < 5)
+    if ((new_pico_per_cycle - old_pico_per_cycle) < 5)
 	return old_pico_per_cycle;
 
     if (ipath_timebase_isvalid(new_pico_per_cycle)) {
