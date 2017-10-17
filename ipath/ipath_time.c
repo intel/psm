@@ -47,6 +47,16 @@
 
 #include "ipath_user.h"
 
+#ifdef min
+#undef min
+#endif
+#define min(a, b) ((a) < (b) ? (a) : (b))
+
+#ifdef max
+#undef max
+#endif
+#define max(a, b) ((a) > (b) ? (a) : (b))
+
 // init the cycle counter to picosecs/cycle conversion automatically
 // at program startup, if it's using timing functions.
 static void init_picos_per_cycle(void) __attribute__ ((constructor));
@@ -208,6 +218,7 @@ ipath_timebase_from_cpuinfo(uint32_t old_pico_per_cycle)
 {
     /* we only validate once */
     uint32_t new_pico_per_cycle = old_pico_per_cycle;
+    uint32_t max_bet_new_old_pico, min_bet_new_old_pico;
 
     char hostname[80];
     gethostname(hostname, 80);
@@ -278,8 +289,10 @@ ipath_timebase_from_cpuinfo(uint32_t old_pico_per_cycle)
     }
 #endif
 
+    max_bet_new_old_pico = max(new_pico_per_cycle, old_pico_per_cycle);
+    min_bet_new_old_pico = min(new_pico_per_cycle, old_pico_per_cycle);
     /* If there's no change (within a small range), just return the old one */
-    if (abs(new_pico_per_cycle - old_pico_per_cycle) < 5)
+    if ((max_bet_new_old_pico - min_bet_new_old_pico) < 5)
 	return old_pico_per_cycle;
 
     if (ipath_timebase_isvalid(new_pico_per_cycle)) {
