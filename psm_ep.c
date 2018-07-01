@@ -1009,8 +1009,8 @@ __psm_ep_open(psm_uuid_t const unique_job_key, struct psm_ep_open_opts const *op
 
 	/* If multi-rail is used, set the first ep unit/port */
 	if (num_rails > 0) {
-	    snprintf(uvalue, 4, "%1d", units[0]);
-	    snprintf(pvalue, 4, "%1d", ports[0]);
+	    snprintf(uvalue, 4, "%d", units[0]);
+	    snprintf(pvalue, 4, "%d", ports[0]);
 	    setenv(uname, uvalue, 1);
 	    setenv(pname, pvalue, 1);
 	}
@@ -1037,8 +1037,8 @@ __psm_ep_open(psm_uuid_t const unique_job_key, struct psm_ep_open_opts const *op
 
     if (psmi_device_is_enabled(devid_enabled, PTL_DEVID_IPS)) {
 	for (i = 1; i < num_rails; i++) {
-	    snprintf(uvalue, 4, "%1d", units[i]);
-	    snprintf(pvalue, 4, "%1d", ports[i]);
+	    snprintf(uvalue, 4, "%d", units[i]);
+	    snprintf(pvalue, 4, "%d", ports[i]);
 	    setenv(uname, uvalue, 1);
 	    setenv(pname, pvalue, 1);
 
