@@ -100,7 +100,7 @@ psm_error_t psmi_mq_wait_internal(psm_mq_req_t *ireq);
 #endif
 
 #ifdef PSMI_PLOCK_IS_SPINLOCK
-  psmi_spinlock_t  psmi_progress_lock;
+  extern psmi_spinlock_t  psmi_progress_lock;
   #define PSMI_PLOCK_INIT()   psmi_spin_init(&psmi_progress_lock)
   #define PSMI_PLOCK_TRY()    psmi_spin_trylock(&psmi_progress_lock)
   #define PSMI_PLOCK()	      psmi_spin_lock(&psmi_progress_lock)
@@ -109,8 +109,8 @@ psm_error_t psmi_mq_wait_internal(psm_mq_req_t *ireq);
   #define PSMI_PUNLOCK_ASSERT()
   #define PSMI_PLOCK_DISABLED  0
 #elif defined(PSMI_PLOCK_IS_MUTEXLOCK_DEBUG) 
-  pthread_mutex_t  psmi_progress_lock;
-  pthread_t	   psmi_progress_lock_owner;
+  extern pthread_mutex_t  psmi_progress_lock;
+  extern pthread_t	   psmi_progress_lock_owner;
   #define PSMI_PLOCK_NO_OWNER	((pthread_t)(-1))
 
   PSMI_ALWAYS_INLINE(

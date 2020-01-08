@@ -47,7 +47,7 @@
 #endif
 
 /* Symbol in am ptl */
-struct ptl_ctl_init psmi_ptl_amsh;
+extern struct ptl_ctl_init psmi_ptl_amsh;
 
 /* Special non-ptl function exposed to pre-attach to shm segment */
 psm_error_t psmi_shm_attach(psm_ep_t ep, int *shmidx_o);

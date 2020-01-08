@@ -254,7 +254,7 @@ int	psmi_diags(void);
  * Fault injection
  */
 struct psmi_faultinj_spec;
-int    psmi_faultinj_enabled; /* use macro to test */
+extern int    psmi_faultinj_enabled; /* use macro to test */
 #if 1 /* possible to disable at compile time */
 #define PSMI_FAULTINJ_ENABLED()	(!!psmi_faultinj_enabled)
 #else

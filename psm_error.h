@@ -42,7 +42,7 @@
 #define PSMI_EP_NORETURN	    ((psm_ep_t) -2)
 #define PSMI_EP_LOGEVENT	    ((psm_ep_t) -3)
 
-psm_ep_errhandler_t psmi_errhandler_global;
+extern psm_ep_errhandler_t psmi_errhandler_global;
 
 psm_error_t psmi_handle_error(psm_ep_t ep, psm_error_t error, 
 			      const char *buf, ...)

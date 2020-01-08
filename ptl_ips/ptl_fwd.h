@@ -38,5 +38,5 @@
 typedef struct ptl_epaddr ips_epaddr_t;
 
 /* Symbol in ips ptl */
-struct ptl_ctl_init psmi_ptl_ips;
+extern struct ptl_ctl_init psmi_ptl_ips;
 #endif /* _PTL_FWD_IPS_H */
